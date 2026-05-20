@@ -1,0 +1,45 @@
+TinyNav 低功耗 GNSS + MQTT 流程说明
+
+1. 普通上电或复位启动
+   - 打开 WiFi 热点 5 分钟
+   - 热点名：TinyNav-xxxxxx
+   - 密码：12345678
+   - 配网页：http://192.168.4.1/
+
+2. 配网页填写内容
+   - 设备 SN
+   - MQTT 地址、端口、用户名、密码
+   - 默认 MQTTS，默认端口 8883
+   - 主题可不填，不填时使用 sys/{SN}/json/up/realTime
+   - SM4 Key/IV 可不填，设备会向服务器 request_sm4
+
+3. MQTT 协议
+   - 本项目只接入一个 MQTT 服务器，对应服务器文档里的 MQTT1
+   - Client ID：<IMEI>mqtts1
+   - 上报：sys/{SN}/json/up/realTime
+   - 请求/响应：sys/{SN}/json/up/resp
+   - 接收命令：sys/{SN}/json/down/cmd
+   - CA 文件：/luadb/rootCA.crt
+
+4. SM4 加密
+   - 服务器下发 set_sm4，包含 key 和 iv
+   - key/iv 支持 16 字符或 32 位 HEX
+   - 上报前执行 SM4-CBC + PKCS7
+   - MQTT payload 是密文 HEX，不是明文 JSON
+
+5. 服务器下发上传频率
+   - Topic：sys/{SN}/json/down/cmd
+   - 推荐命令：{"cmd":"set_report_interval","request_id":"freq-001","interval":600}
+   - 也兼容：{"cmd":"set_config","config":{"interval":600}}
+   - interval 单位是秒
+   - 兼容 sendFrequency/frequency/freq，单位是分钟
+   - 最小 60 秒，最大 24 小时
+   - 设备保存后回 sys/{SN}/json/up/resp，下一次休眠周期生效
+
+6. 5 分钟配网窗口结束后
+   - 已配置：打开 GNSS，定位成功后 MQTT 上报密文，然后休眠
+   - 未配置：进入休眠，下一次唤醒继续开放 5 分钟热点
+
+7. 手机自动弹网页说明
+   - 程序会把 HTTP 任意路径重定向到 http://192.168.4.1/
+   - 如果手机没有自动弹窗，手动打开 http://192.168.4.1/ 即可
