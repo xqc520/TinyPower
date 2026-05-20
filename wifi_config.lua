@@ -5,7 +5,7 @@ local storage = require("storage")
 local function optionalRequire(name)
     local ok, mod = pcall(require, name)
     if not ok then
-        return nil
+        return nil, mod
     end
     if mod == true then
         return _G and _G[name]
@@ -14,11 +14,13 @@ local function optionalRequire(name)
 end
 
 optionalRequire("sysplus")
+optionalRequire("httpplus")
 
-local dhcpsrvLib = optionalRequire("dhcpsrv")
-local dnsproxyLib = optionalRequire("dnsproxy")
+local dhcpsrvLib, dhcpsrvLoadErr = optionalRequire("dhcpsrv")
+local dnsproxyLib, dnsproxyLoadErr = optionalRequire("dnsproxy")
 
 local M = { running = false }
+local apDhcp
 
 local function urlDecode(s)
     s = (s or ""):gsub("+", " ")
@@ -119,33 +121,52 @@ local function logError(...)
     end
 end
 
+local function ipParts(ip)
+    local a, b, c, d = tostring(ip or ""):match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
+    if not a then
+        return { 192, 168, 4, 1 }
+    end
+    return { tonumber(a), tonumber(b), tonumber(c), tonumber(d) }
+end
+
 local function setupApNetwork()
     local adapter = apAdapter()
     if not adapter then
         logWarn("setup", "socket.LWIP_AP missing")
-        return
+        return false
     end
 
+    local gateway = config.AP_GATEWAY or config.AP_IP
     if netdrv and netdrv.ipv4 then
-        local ok, err = pcall(netdrv.ipv4, adapter, config.AP_IP, config.AP_NETMASK, "0.0.0.0")
+        local ok, ip, mask, gw = pcall(netdrv.ipv4, adapter, config.AP_IP, config.AP_NETMASK, gateway)
         if ok then
-            logInfo("setup", "ap ip configured", config.AP_IP)
+            logInfo("setup", "ap ip configured", ip or config.AP_IP, mask or config.AP_NETMASK, gw or gateway)
         else
-            logWarn("setup", "ap ip configure failed", err)
+            logWarn("setup", "ap ip configure failed", ip)
+            return false
         end
     else
         logWarn("setup", "netdrv.ipv4 unavailable")
+        return false
     end
 
     if dhcpsrvLib and dhcpsrvLib.create then
-        local ok, ret = pcall(dhcpsrvLib.create, { adapter = adapter })
-        if ok and ret ~= false then
+        local serverIp = ipParts(config.AP_IP)
+        local ok, ret = pcall(dhcpsrvLib.create, {
+            adapter = adapter,
+            gw = serverIp,
+            dns = serverIp
+        })
+        if ok and ret then
+            apDhcp = ret
             logInfo("setup", "dhcp server started")
         else
             logWarn("setup", "dhcp server start failed", ret)
+            return false
         end
     else
-        logWarn("setup", "dhcpsrv unavailable")
+        logWarn("setup", "dhcpsrv unavailable", dhcpsrvLoadErr)
+        return false
     end
 
     if dnsproxyLib and dnsproxyLib.setup and socket and socket.LWIP_GP then
@@ -153,7 +174,10 @@ local function setupApNetwork()
         if not ok then
             logWarn("setup", "dns proxy setup failed", err)
         end
+    elseif dnsproxyLoadErr then
+        logWarn("setup", "dnsproxy unavailable", dnsproxyLoadErr)
     end
+    return true
 end
 
 function M.stop()
@@ -164,27 +188,29 @@ function M.stop()
 
     local adapter = apAdapter()
     if httpsrv and httpsrv.stop then
-        local ok = pcall(httpsrv.stop, 80, nil, adapter)
-        if not ok then
-            pcall(httpsrv.stop, 80)
-        end
+        pcall(httpsrv.stop, 80)
     end
-    if dhcpsrvLib and dhcpsrvLib.stop and adapter then
-        pcall(dhcpsrvLib.stop, adapter)
+    if apDhcp and apDhcp.close then
+        pcall(function()
+            apDhcp:close()
+        end)
+        apDhcp = nil
     end
-    if wlan and wlan.stopAP then
-        wlan.stopAP()
+    if wlan and wlan.setMode and wlan.NONE then
+        pcall(wlan.setMode, wlan.NONE)
+    elseif wlan and wlan.stopAP then
+        pcall(wlan.stopAP)
     end
     logInfo("setup", "ap stopped")
 end
 
 local function startAp(ssid, password)
     if wlan and wlan.createAP then
-        local ok, ret, err = pcall(wlan.createAP, ssid, password, config.AP_IP, config.AP_NETMASK, config.AP_CHANNEL, { max_conn = 1 })
+        local ok, ret, err = pcall(wlan.createAP, ssid, password)
         if not ok then
             return false, ret
         end
-        return ret, err
+        return true, ret or err
     end
     return false, "wlan.createAP unavailable"
 end
@@ -198,8 +224,8 @@ function M.startWindow()
     if wlan and wlan.init then
         pcall(wlan.init)
     end
-    if wlan and wlan.setMode and wlan.AP then
-        pcall(wlan.setMode, wlan.AP)
+    if sys and sys.wait then
+        sys.wait(100)
     end
 
     local ok, err = startAp(ssid, config.AP_PASS)
@@ -218,17 +244,20 @@ function M.startWindow()
     if sys and sys.wait then
         sys.wait(1000)
     end
-    setupApNetwork()
+    local netOk = setupApNetwork()
+    if not netOk then
+        logError("setup", "ap network setup failed, phone may stay obtaining ip")
+    end
 
     if httpsrv and httpsrv.start then
         local adapter = apAdapter()
-        local hsOk, hsErr
+        local callOk, hsErr
         if adapter then
-            hsOk, hsErr = httpsrv.start(80, handler, adapter)
+            callOk, hsErr = pcall(httpsrv.start, 80, handler, adapter)
         else
-            hsOk, hsErr = httpsrv.start(80, handler)
+            callOk, hsErr = pcall(httpsrv.start, 80, handler)
         end
-        if not hsOk then
+        if not callOk then
             logWarn("setup", "http server start failed", hsErr)
         else
             logInfo("setup", "http server started", 80)
