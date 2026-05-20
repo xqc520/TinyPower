@@ -7,18 +7,19 @@ local power = require("power")
 
 local M = {}
 
--- Return current epoch seconds for report and wake logs.
+-- 获取当前时间戳，用于上报和启动/休眠日志。
 local function now()
     return os and os.time and os.time() or 0
 end
 
--- Log and return the next interval so every exit path is visible.
+-- 记录下一次执行间隔，所有异常路径也统一从这里返回。
 local function nextDelay(reason, ms)
     log.info("app", "next", reason, math.floor((ms or 0) / 1000), "s", "time", now())
     return ms
 end
 
--- Decide whether to open the AP config portal on this boot.
+-- 判断本次启动是否需要打开配网热点。
+-- 未配置时必须开热点；已配置时默认直接上报，不再每次普通上电都开热点。
 local function setupWindowNeeded()
     if config.MQTT_TEST_MODE and storage.ready() then
         return false
@@ -29,7 +30,7 @@ local function setupWindowNeeded()
     return config.SETUP_ON_NORMAL_BOOT and (not power.isTimerWake())
 end
 
--- Run one report cycle: get location, publish it, then return next delay.
+-- 执行一轮业务：读取配置 -> 获取经纬度 -> MQTT 上报 -> 返回下一次间隔。
 local function workOnce()
     local cfg = storage.get()
     if not storage.ready(cfg) then
@@ -59,7 +60,7 @@ local function workOnce()
     return nextDelay(ok and "publish_ok" or "publish_fail", storage.get().report_interval_ms)
 end
 
--- Initialize storage/power and run the main loop in one LuatOS task.
+-- 应用入口：初始化存储，判断启动来源，然后循环执行上报和低功耗。
 function M.start()
     storage.init()
     if config.LOW_POWER_ENABLE then
@@ -71,6 +72,8 @@ function M.start()
     sys.taskInit(function()
         local timerWake = power.isTimerWake()
         local wakeId = power.timerWakeId and power.timerWakeId() or nil
+
+        -- 打印启动类型：normal 表示普通上电，lowpower_wake 表示深睡定时唤醒。
         log.info("app", "boot", timerWake and "lowpower_wake" or "normal", "time", now(), "id", tostring(wakeId), "cfg", storage.ready() and 1 or 0)
         if timerWake then
             log.info("app", "wake lowpower", "id", tostring(wakeId), "time", now())
@@ -81,6 +84,8 @@ function M.start()
             log.info("app", "boot hold", config.BOOT_LOG_DELAY_MS, "ms")
             sys.wait(config.BOOT_LOG_DELAY_MS)
         end
+
+        -- 只有未配置时才进入配网页面；已配置设备直接上报。
         if setupWindowNeeded() then
             log.info("app", "setup window")
             wifiConfig.startWindow()
@@ -92,14 +97,17 @@ function M.start()
         while true do
             local nextMs = workOnce()
             if config.MQTT_TEST_MODE then
+                -- MQTT 测试模式不进低功耗，按短间隔循环，方便连续看日志。
                 local testWait = config.MQTT_TEST_LOOP_MS or nextMs
                 local waitMs = math.min(nextMs, testWait)
                 log.info("app", "test wait", math.floor(waitMs / 1000), "s", "time", now())
                 sys.wait(waitMs)
             elseif not config.LOW_POWER_ENABLE then
+                -- 关闭低功耗时，只等待下一周期，不调用 power.sleep。
                 log.info("app", "sleep disabled", math.floor(nextMs / 1000), "s", "time", now())
                 sys.wait(nextMs)
             else
+                -- 正常生产流程：上报完成后进入低功耗，等待定时器唤醒。
                 log.info("app", "sleep next", math.floor(nextMs / 1000), "s", "time", now())
                 power.sleep(nextMs)
             end
