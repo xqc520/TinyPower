@@ -1,11 +1,13 @@
 PROJECT = "TinyNav"
 VERSION = "1.0.0"
 
--- LuatOS 任务框架，最后必须 sys.run()
+-- Load LuatOS scheduler.
 sys = require("sys")
 
+log.info("main", "script start", PROJECT, VERSION)
 
--- 业务入口：配网窗口 -> 定位 -> 上报 -> 休眠
+-- Start the application state machine.
 require("app").start()
 
+-- Hand control to LuatOS.
 sys.run()

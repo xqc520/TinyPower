@@ -2,6 +2,7 @@ local config = require("config")
 local device = require("device")
 local storage = require("storage")
 
+-- Load optional firmware modules without breaking startup.
 local function optionalRequire(name)
     local ok, mod = pcall(require, name)
     if not ok then
@@ -18,10 +19,27 @@ optionalRequire("httpplus")
 
 local dhcpsrvLib, dhcpsrvLoadErr = optionalRequire("dhcpsrv")
 local dnsproxyLib, dnsproxyLoadErr = optionalRequire("dnsproxy")
+local udpsrvLib, udpsrvLoadErr = optionalRequire("udpsrv")
 
 local M = { running = false }
 local apDhcp
+local captiveDns
+local restartScheduled = false
 
+local PROBE_URIS = {
+    ["/generate_204"] = true,
+    ["/gen_204"] = true,
+    ["/hotspot-detect.html"] = true,
+    ["/library/test/success.html"] = true,
+    ["/connecttest.txt"] = true,
+    ["/ncsi.txt"] = true,
+    ["/success.txt"] = true,
+    ["/redirect"] = true,
+    ["/canonical.html"] = true,
+    ["/fwlink/"] = true
+}
+
+-- Decode URL form text from the config page.
 local function urlDecode(s)
     s = (s or ""):gsub("+", " ")
     return (s:gsub("%%(%x%x)", function(h)
@@ -29,6 +47,7 @@ local function urlDecode(s)
     end))
 end
 
+-- Parse form-urlencoded POST body into a table.
 local function readForm(body)
     local t = {}
     for pair in tostring(body or ""):gmatch("[^&]+") do
@@ -38,6 +57,7 @@ local function readForm(body)
     return t
 end
 
+-- Escape user-controlled values before writing HTML.
 local function html(s)
     return tostring(s or "")
         :gsub("&", "&amp;")
@@ -46,6 +66,12 @@ local function html(s)
         :gsub('"', "&quot;")
 end
 
+-- Build the local AP setup URL.
+local function apUrl()
+    return "http://" .. config.AP_IP .. "/"
+end
+
+-- Render the setup form with current saved values.
 local function page(msg)
     local c = storage.get()
     local ssl = c.mqtt_ssl and " checked" or ""
@@ -65,31 +91,75 @@ button{width:100%;height:44px;border:0;border-radius:6px;background:#1463ff;colo
 <div><label>&#38388;&#38548;(&#31186;)</label><input name="interval" inputmode="numeric" value="]] .. html(interval) .. [["></div></div>
 <label>&#29992;&#25143;&#21517;</label><input name="mqtt_user" value="]] .. html(c.mqtt_user) .. [[">
 <label>&#23494;&#30721;</label><input name="mqtt_pass" type="password" value="]] .. html(c.mqtt_pass) .. [[">
-<label>&#20027;&#39064;</label><input name="mqtt_topic" placeholder="sys/{SN}/json/up/realTime" value="]] .. html(c.mqtt_topic) .. [[">
 <label class="ck"><input type="checkbox" name="mqtt_ssl"]] .. ssl .. [[>&#21551;&#29992;MQTTS</label>
-<label>SM4 Key(&#30041;&#31354;&#19981;&#25913;)</label><input name="sm4_key">
-<label>SM4 IV(&#30041;&#31354;&#19981;&#25913;)</label><input name="sm4_iv">
 <button type="submit">&#20445;&#23384;</button></form></main></body></html>]]
 end
 
+-- Render a simple success page before reboot.
+local function savedPage()
+    return [[<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>TinyNav &#37197;&#32593;</title>
+<style>body{font-family:Arial,sans-serif;margin:0;background:#f7f8fa;color:#222}
+main{max-width:420px;margin:auto;padding:28px 22px;text-align:center}
+h2{margin-top:18px}.ok{font-size:44px;color:#19723b;margin:22px 0 8px}p{line-height:1.6;color:#444}</style>
+</head><body><main><div class="ok">&#10003;</div><h2>&#20445;&#23384;&#25104;&#21151;</h2>
+<p>&#35774;&#22791;&#27491;&#22312;&#37325;&#21551;&#65292;&#35831;&#31245;&#31561;&#21518;&#37325;&#26032;&#36830;&#25509;&#12290;</p>
+</main></body></html>]]
+end
+
+-- Reboot after the browser has received the saved page.
+local function scheduleRestart()
+    if restartScheduled then
+        return
+    end
+    restartScheduled = true
+    sys.timerStart(function()
+        if log and log.info then
+            log.info("setup", "config saved, reboot")
+        end
+        if rtos and rtos.reboot then
+            rtos.reboot()
+        else
+            M.stop()
+            sys.publish("CONFIG_UPDATED")
+        end
+    end, config.CONFIG_REBOOT_DELAY_MS or 1500)
+end
+
+-- Save submitted AP/MQTT configuration.
 local function save(body)
     local c = readForm(body)
     c.mqtt_ssl = c.mqtt_ssl == "on"
     c.report_interval_ms = (tonumber(c.interval) or 600) * 1000
     local ok = storage.save(c)
-    if c.sm4_key and #c.sm4_key > 0 and c.sm4_iv and #c.sm4_iv > 0 then
-        storage.saveSm4(c.sm4_key, c.sm4_iv)
+    if ok then
+        scheduleRestart()
+        return savedPage()
     end
-    sys.publish("CONFIG_UPDATED")
-    return page(ok and "Saved" or "Save failed")
+    return page("Save failed")
 end
 
+-- Normalize HTTP response tuple values.
 local function reply(code, headers, body)
     return code, headers or {}, body or ""
 end
 
+-- Redirect captive-portal probes back to the setup page.
+local function captiveRedirect()
+    return reply(302, {
+        Location = apUrl(),
+        ["Cache-Control"] = "no-store, no-cache, must-revalidate",
+        Pragma = "no-cache",
+        ["Content-Type"] = "text/html; charset=utf-8"
+    }, '<html><head><meta http-equiv="refresh" content="0;url=' .. apUrl() .. '"></head><body>Redirecting...</body></html>')
+end
+
+-- HTTP router for setup, save, and captive-portal probes.
 local function handler(client, method, uri, headers, body)
     uri = (uri or "/"):match("^[^?]*")
+    if method == "GET" and PROBE_URIS[uri] then
+        return captiveRedirect()
+    end
     if method == "POST" and uri == "/save" then
         return reply(200, { ["Content-Type"] = "text/html; charset=utf-8" }, save(body))
     end
@@ -99,28 +169,33 @@ local function handler(client, method, uri, headers, body)
     return reply(200, { ["Content-Type"] = "text/html; charset=utf-8" }, page(""))
 end
 
+-- Return the LuatOS AP network adapter id.
 local function apAdapter()
     return socket and socket.LWIP_AP
 end
 
+-- Safe wrapper around log.warn.
 local function logWarn(...)
     if log and log.warn then
         log.warn(...)
     end
 end
 
+-- Safe wrapper around log.info.
 local function logInfo(...)
     if log and log.info then
         log.info(...)
     end
 end
 
+-- Safe wrapper around log.error.
 local function logError(...)
     if log and log.error then
         log.error(...)
     end
 end
 
+-- Split dotted IPv4 text into numeric octets.
 local function ipParts(ip)
     local a, b, c, d = tostring(ip or ""):match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
     if not a then
@@ -129,6 +204,431 @@ local function ipParts(ip)
     return { tonumber(a), tonumber(b), tonumber(c), tonumber(d) }
 end
 
+-- Convert IPv4 octets into raw bytes.
+local function ipBytes(ip)
+    return string.char(ip[1], ip[2], ip[3], ip[4])
+end
+
+-- Encode a 16-bit integer in network byte order.
+local function toU16(n)
+    return string.char((n >> 8) & 0xFF, n & 0xFF)
+end
+
+-- Encode a 32-bit integer in network byte order.
+local function toU32(n)
+    return string.char(
+        (n >> 24) & 0xFF,
+        (n >> 16) & 0xFF,
+        (n >> 8) & 0xFF,
+        n & 0xFF
+    )
+end
+
+-- Read a 16-bit integer from a raw byte string.
+local function readU16(s, pos)
+    local a, b = s:byte(pos, pos + 1)
+    if not a or not b then
+        return nil
+    end
+    return a * 256 + b
+end
+
+-- Convert LuatOS remote IP bytes into dotted IPv4 text.
+local function remoteIpToString(remoteIp)
+    if remoteIp and #remoteIp == 5 then
+        return string.format("%d.%d.%d.%d", remoteIp:byte(2), remoteIp:byte(3), remoteIp:byte(4), remoteIp:byte(5))
+    end
+    return nil
+end
+
+-- Build a DNS answer that points captive checks to the AP IP.
+local function buildDnsResponse(query)
+    if not query or #query < 17 then
+        return nil
+    end
+
+    local qdcount = readU16(query, 5)
+    if not qdcount or qdcount < 1 then
+        return nil
+    end
+
+    local pos = 13
+    while pos <= #query do
+        local labelLen = query:byte(pos)
+        if not labelLen then
+            return nil
+        end
+        pos = pos + 1
+        if labelLen == 0 then
+            break
+        end
+        pos = pos + labelLen
+    end
+
+    if pos + 3 > #query then
+        return nil
+    end
+
+    local qtype = readU16(query, pos)
+    local question = query:sub(13, pos + 3)
+    local answer = ""
+    local answerCount = 0
+
+    if qtype == 1 or qtype == 255 then
+        answerCount = 1
+        answer =
+            "\192\012" ..
+            "\000\001" ..
+            "\000\001" ..
+            toU32(30) ..
+            "\000\004" ..
+            ipBytes(ipParts(config.AP_IP))
+    end
+
+    return query:sub(1, 2) ..
+        "\129\128" ..
+        query:sub(5, 6) ..
+        toU16(answerCount) ..
+        "\000\000" ..
+        "\000\000" ..
+        question ..
+        answer
+end
+
+-- Start raw-socket DNS for captive portal auto-open.
+local function startCaptiveDns(adapter)
+    if captiveDns then
+        return true
+    end
+    if not (socket and socket.create and socket.config and socket.rx and socket.tx) then
+        logWarn("setup", "socket dns unavailable")
+        return false
+    end
+
+    local rxBuff = zbuff.create(1500)
+    -- Receive DNS datagrams and send AP-IP answers.
+    local function onDnsRequest(sc, event)
+        if event ~= socket.EVENT then
+            return
+        end
+        while true do
+            rxBuff:seek(0)
+            local succ, dataLen, remoteIp, remotePort = socket.rx(sc, rxBuff)
+            if not succ or not dataLen or dataLen <= 0 then
+                break
+            end
+
+            local query = rxBuff:toStr(0, dataLen)
+            rxBuff:del()
+            local response = buildDnsResponse(query)
+            local clientIp = remoteIpToString(remoteIp)
+            if response and clientIp and remotePort then
+                socket.tx(sc, response, clientIp, remotePort)
+            end
+        end
+    end
+
+    captiveDns = socket.create(adapter, onDnsRequest)
+    if not captiveDns then
+        logWarn("setup", "captive dns create failed")
+        return false
+    end
+    if not socket.config(captiveDns, 53, true) then
+        logWarn("setup", "captive dns config failed")
+        socket.close(captiveDns)
+        captiveDns = nil
+        return false
+    end
+    socket.connect(captiveDns, "255.255.255.255", 0)
+    logInfo("setup", "captive dns started", config.AP_IP)
+    return true
+end
+
+-- Close the captive DNS socket.
+local function stopCaptiveDns()
+    if not captiveDns then
+        return
+    end
+    socket.close(captiveDns)
+    if socket.release then
+        socket.release(captiveDns)
+    end
+    captiveDns = nil
+end
+
+-- Decode a DHCP packet from a zbuff into a Lua table.
+local function dhcpDecode(buff)
+    local pkg = {}
+    pkg.op = buff[0]
+    pkg.htype = buff[1]
+    pkg.hlen = buff[2]
+    pkg.hops = buff[3]
+
+    buff:seek(4)
+    pkg.xid = buff:read(4)
+    _, pkg.secs = buff:unpack(">H")
+    _, pkg.flags = buff:unpack(">H")
+    pkg.ciaddr = buff:read(4)
+    pkg.yiaddr = buff:read(4)
+    pkg.siaddr = buff:read(4)
+    pkg.giaddr = buff:read(4)
+    pkg.chaddr = buff:read(16)
+    buff:seek(192, zbuff.SEEK_CUR)
+    _, pkg.magic = buff:unpack(">I")
+
+    pkg.opts = {}
+    while buff:len() > buff:used() do
+        local tagRaw = buff:read(1)
+        if not tagRaw or #tagRaw == 0 then
+            break
+        end
+        local tag = tagRaw:byte()
+        if tag == 0xFF then
+            break
+        elseif tag ~= 0 then
+            local lenRaw = buff:read(1)
+            if not lenRaw or #lenRaw == 0 then
+                break
+            end
+            local len = lenRaw:byte()
+            local data = buff:read(len)
+            if not data or #data ~= len then
+                break
+            end
+            if tag == 53 then
+                pkg.msgtype = data:byte()
+            end
+            pkg.opts[#pkg.opts + 1] = { tag, data }
+        end
+    end
+
+    if not pkg.msgtype then
+        return nil
+    end
+    return pkg
+end
+
+-- Encode a DHCP packet table back into a zbuff.
+local function dhcpEncode(pkg, buff)
+    buff:seek(0)
+    buff[0] = pkg.op
+    buff[1] = pkg.htype
+    buff[2] = pkg.hlen
+    buff[3] = pkg.hops
+
+    buff:seek(4)
+    buff:write(pkg.xid)
+    buff:pack(">H", pkg.secs)
+    buff:pack(">H", pkg.flags)
+    buff:write(pkg.ciaddr)
+    buff:write(pkg.yiaddr)
+    buff:write(pkg.siaddr)
+    buff:write(pkg.giaddr)
+    buff:write(pkg.chaddr)
+    buff:seek(192, zbuff.SEEK_CUR)
+    buff:pack(">I", pkg.magic)
+
+    for _, opt in ipairs(pkg.opts) do
+        buff:write(opt[1])
+        buff:write(#opt[2])
+        buff:write(opt[2])
+    end
+    buff:write(0xFF, 0x00)
+end
+
+-- Send DHCP offer/ack/nack to a client.
+local function dhcpSendReply(srv, pkg, client, msgtype)
+    local buff = zbuff.create(300)
+    local gw = srv.opts.gw
+    local dns = srv.opts.dns or gw
+    local msgName = msgtype == 2 and "offer" or (msgtype == 5 and "ack" or "nack")
+
+    pkg.op = 2
+    pkg.secs = 0
+    pkg.ciaddr = "\0\0\0\0"
+    pkg.yiaddr = string.char(gw[1], gw[2], gw[3], client.ip)
+    pkg.siaddr = string.char(gw[1], gw[2], gw[3], gw[4])
+    pkg.giaddr = "\0\0\0\0"
+    pkg.opts = {
+        { 53, string.char(msgtype) },
+        { 1, ipBytes(srv.opts.mark) },
+        { 3, ipBytes(gw) },
+        { 51, "\x00\x00\x1E\x00" },
+        { 54, ipBytes(gw) },
+        { 6, ipBytes(dns) }
+    }
+
+    dhcpEncode(pkg, buff)
+    if srv.udp and srv.udp.send then
+        srv.udp:send(buff, "255.255.255.255", 68)
+    elseif srv.ctrl then
+        local ok, full, result = socket.tx(srv.ctrl, buff, "255.255.255.255", 68)
+        logInfo("dhcp", msgName, string.format("%d.%d.%d.%d", gw[1], gw[2], gw[3], client.ip), ok, full, result)
+    end
+end
+
+-- Allocate or reuse an IP address for a DHCP discover.
+local function dhcpHandleDiscover(srv, pkg)
+    local mac = pkg.chaddr:sub(1, pkg.hlen)
+    for _, client in pairs(srv.clients) do
+        if client.mac == mac then
+            dhcpSendReply(srv, pkg, client, 2)
+            return
+        end
+    end
+
+    local ipSuffix
+    for i = srv.opts.ip_start, srv.opts.ip_end do
+        if not srv.clients[i] then
+            ipSuffix = i
+            break
+        end
+    end
+    if not ipSuffix then
+        logWarn("dhcpsrv", "no free IP")
+        return
+    end
+
+    local client = { mac = mac, ip = ipSuffix }
+    srv.clients[ipSuffix] = client
+    logInfo("dhcp", "discover", string.format("%02X:%02X:%02X:%02X:%02X:%02X", mac:byte(1, 6)), ipSuffix)
+    dhcpSendReply(srv, pkg, client, 2)
+end
+
+-- Confirm a known DHCP lease request.
+local function dhcpHandleRequest(srv, pkg)
+    local mac = pkg.chaddr:sub(1, pkg.hlen)
+    for _, client in pairs(srv.clients) do
+        if client.mac == mac then
+            logInfo("dhcp", "request", string.format("%02X:%02X:%02X:%02X:%02X:%02X", mac:byte(1, 6)), client.ip)
+            dhcpSendReply(srv, pkg, client, 5)
+            return
+        end
+    end
+    logWarn("dhcp", "request unknown client", string.format("%02X:%02X:%02X:%02X:%02X:%02X", mac:byte(1, 6)))
+    dhcpSendReply(srv, pkg, { ip = 0 }, 6)
+end
+
+-- Process datagrams delivered by udpsrv-based DHCP backend.
+local function dhcpTask(srv)
+    while not srv.closed do
+        local ok, data = sys.waitUntil(srv.udp_topic, 1000)
+        if ok and data and not srv.closed then
+            local pkg = dhcpDecode(zbuff.create(#data, data))
+            if pkg and pkg.magic == 0x63825363 and pkg.op == 1 and pkg.htype == 1 and pkg.hlen == 6 then
+                if pkg.msgtype == 1 then
+                    dhcpHandleDiscover(srv, pkg)
+                elseif pkg.msgtype == 3 then
+                    dhcpHandleRequest(srv, pkg)
+                end
+            end
+        end
+    end
+end
+
+-- Create a DHCP server using udpsrv or raw socket fallback.
+local function createInlineDhcp(opts)
+    opts = opts or {}
+    opts.mark = opts.mark or { 255, 255, 255, 0 }
+    opts.gw = opts.gw or ipParts(config.AP_IP)
+    opts.dns = opts.dns or { opts.gw[1], opts.gw[2], opts.gw[3], opts.gw[4] }
+    opts.ip_start = opts.ip_start or 100
+    opts.ip_end = opts.ip_end or 200
+
+    if not udpsrvLib or not udpsrvLib.create then
+        logWarn("setup", "udpsrv unavailable", udpsrvLoadErr)
+        local srv = {
+            opts = opts,
+            clients = {},
+            closed = false
+        }
+        local rxBuff = zbuff.create(1500)
+        -- Raw socket callback used when udpsrv is not available.
+        local function onDhcpSocket(sc, event)
+            logInfo("dhcp", "socket event", event)
+            if event ~= socket.EVENT or srv.closed then
+                return
+            end
+            while true do
+                rxBuff:seek(0)
+                local succ, dataLen, remoteIp, remotePort = socket.rx(sc, rxBuff)
+                if not succ or not dataLen or dataLen <= 0 then
+                    break
+                end
+                logInfo("dhcp", "rx", dataLen, remotePort)
+                local data = rxBuff:toStr(0, dataLen)
+                rxBuff:del()
+                local pkg = dhcpDecode(zbuff.create(#data, data))
+                if pkg and pkg.magic == 0x63825363 and pkg.op == 1 and pkg.htype == 1 and pkg.hlen == 6 then
+                    if pkg.msgtype == 1 then
+                        dhcpHandleDiscover(srv, pkg)
+                    elseif pkg.msgtype == 3 then
+                        dhcpHandleRequest(srv, pkg)
+                    end
+                end
+            end
+        end
+
+        srv.ctrl = socket.create(opts.adapter, onDhcpSocket)
+        if not srv.ctrl then
+            logWarn("setup", "socket dhcp create failed")
+            return nil
+        end
+        if not socket.config(srv.ctrl, 67, true) then
+            logWarn("setup", "socket dhcp config failed")
+            socket.close(srv.ctrl)
+            return nil
+        end
+        local ok, ready = socket.connect(srv.ctrl, "255.255.255.255", 0)
+        logInfo("setup", "socket dhcp connect", ok, ready)
+
+        -- Close the raw-socket DHCP backend.
+        function srv:close()
+            if self.closed then
+                return
+            end
+            self.closed = true
+            if self.ctrl then
+                socket.close(self.ctrl)
+                if socket.release then
+                    socket.release(self.ctrl)
+                end
+            end
+            self.ctrl = nil
+        end
+
+        return srv
+    end
+
+    local srv = {
+        opts = opts,
+        clients = {},
+        closed = false,
+        udp_topic = "dhcpd_inline_" .. tostring(opts.adapter or 0) .. "_" .. tostring(mcu.ticks())
+    }
+    srv.udp = udpsrvLib.create(67, srv.udp_topic, opts.adapter)
+    if not srv.udp then
+        return nil
+    end
+
+    sys.taskInit(dhcpTask, srv)
+    -- Close the udpsrv DHCP backend and wake its task.
+    function srv:close()
+        if self.closed then
+            return
+        end
+        self.closed = true
+        if self.udp and self.udp.close then
+            self.udp:close()
+        end
+        self.udp = nil
+        sys.publish(self.udp_topic)
+    end
+
+    return srv
+end
+
+-- Configure AP IP, DHCP, and captive DNS.
 local function setupApNetwork()
     local adapter = apAdapter()
     if not adapter then
@@ -166,20 +666,31 @@ local function setupApNetwork()
         end
     else
         logWarn("setup", "dhcpsrv unavailable", dhcpsrvLoadErr)
-        return false
+        local serverIp = ipParts(config.AP_IP)
+        apDhcp = createInlineDhcp({
+            adapter = adapter,
+            gw = serverIp,
+            dns = serverIp
+        })
+        if not apDhcp then
+            return false
+        end
+        logInfo("setup", "inline dhcp server started")
     end
 
-    if dnsproxyLib and dnsproxyLib.setup and socket and socket.LWIP_GP then
+    local dnsOk = startCaptiveDns(adapter)
+    if not dnsOk and dnsproxyLib and dnsproxyLib.setup and socket and socket.LWIP_GP then
         local ok, err = pcall(dnsproxyLib.setup, adapter, socket.LWIP_GP)
         if not ok then
             logWarn("setup", "dns proxy setup failed", err)
         end
-    elseif dnsproxyLoadErr then
+    elseif not dnsOk and dnsproxyLoadErr then
         logWarn("setup", "dnsproxy unavailable", dnsproxyLoadErr)
     end
     return true
 end
 
+-- Stop HTTP, DNS, DHCP, and AP radio.
 function M.stop()
     if not M.running then
         return
@@ -190,6 +701,7 @@ function M.stop()
     if httpsrv and httpsrv.stop then
         pcall(httpsrv.stop, 80)
     end
+    stopCaptiveDns()
     if apDhcp and apDhcp.close then
         pcall(function()
             apDhcp:close()
@@ -204,6 +716,7 @@ function M.stop()
     logInfo("setup", "ap stopped")
 end
 
+-- Start the AP, trying secure mode first when a password is supplied.
 local function startAp(ssid, password)
     if wlan and wlan.createAP then
         local ok, ret, err = pcall(wlan.createAP, ssid, password)
@@ -215,6 +728,7 @@ local function startAp(ssid, password)
     return false, "wlan.createAP unavailable"
 end
 
+-- Open the config portal and keep it alive for AP_WINDOW_MS.
 function M.startWindow()
     if M.running then
         return true

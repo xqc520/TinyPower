@@ -1,23 +1,26 @@
 local M = {}
 
+-- Normalize optional text fields before validating keys.
 local function trim(s)
     return tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
+-- Convert a 32-char hex string into 16 raw bytes.
 local function fromHex(s)
     return (s:gsub("(%x%x)", function(h)
         return string.char(tonumber(h, 16))
     end))
 end
 
+-- Convert encrypted bytes to upper-case hex for MQTT payloads.
 local function toHex(s)
     return (s:gsub(".", function(c)
         return string.format("%02X", c:byte())
     end))
 end
 
+-- Accept either 16 raw chars or 32 hex chars as SM4 material.
 local function keyBytes(s)
-    -- 协议支持 16 字符明文 key/iv，也支持 32 位 HEX
     s = trim(s)
     if #s == 32 and s:match("^[0-9a-fA-F]+$") then
         s = fromHex(s)
@@ -25,13 +28,14 @@ local function keyBytes(s)
     return #s == 16 and s or nil
 end
 
+-- Check that both key and IV can become valid SM4 byte strings.
 function M.ready(c)
     c = c or {}
     return keyBytes(c.key) ~= nil and keyBytes(c.iv) ~= nil
 end
 
+-- Encrypt plaintext as SM4-CBC/PKCS7 and return hex text.
 function M.encryptHex(plain, c)
-    -- 实时上报要求：SM4-CBC + PKCS7 + HEX
     local key, iv = keyBytes(c and c.key), keyBytes(c and c.iv)
     if not (gmssl and key and iv) then
         return nil

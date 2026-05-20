@@ -2,8 +2,8 @@ local config = require("config")
 
 local M = { opened = false }
 
+-- Power and bind the GNSS UART once.
 function M.open()
-    -- 打开 GNSS 电源并把 NMEA 串口交给 libgnss 解析
     if M.opened then
         return
     end
@@ -16,10 +16,11 @@ function M.open()
     end
     libgnss.bind(config.GNSS_UART_ID)
     M.opened = true
+    log.info("gnss", "opened", config.GNSS_UART_ID, config.GNSS_BAUD)
 end
 
+-- Close GNSS UART and power to save energy after a fix attempt.
 function M.close()
-    -- 定位结束立刻关 GNSS，省电优先
     if not M.opened then
         return
     end
@@ -30,10 +31,11 @@ function M.close()
         pm.power(pm.GPS, false)
     end
     M.opened = false
+    log.info("gnss", "closed")
 end
 
+-- Read the latest valid RMC/GGA pair into the app location shape.
 local function snapshot()
-    -- 只在 RMC 有效时返回定位；坐标为 WGS84
     local rmc = libgnss.getRmc(2)
     if not (rmc and rmc.valid and rmc.lat and rmc.lng) then
         return nil
@@ -56,8 +58,8 @@ local function snapshot()
     }
 end
 
+-- Wait until GNSS reports a valid fix or the timeout expires.
 function M.fix(timeout)
-    -- 最多等 timeout，成功就返回一次定位
     M.open()
     timeout = timeout or config.GNSS_FIX_TIMEOUT_MS
     local waited = 0
@@ -69,6 +71,7 @@ function M.fix(timeout)
         local step = math.min(5000, timeout - waited)
         sys.waitUntil("GNSS_STATE", step)
         waited = waited + step
+        log.info("gnss", "waiting", waited)
     end
 end
 

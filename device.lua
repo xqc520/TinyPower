@@ -2,19 +2,18 @@ local storage = require("storage")
 
 local M = {}
 
--- 读取模块信息；失败就返回 nil，不影响主流程
+-- Read a mobile module value without letting missing APIs break boot.
 local function mobileValue(name)
     if mobile and mobile[name] then
         local ok, v = pcall(mobile[name])
         if ok and v and #tostring(v) > 0 then
-            local s = tostring(v):gsub("%z", "")
-            return s
+            return tostring(v):gsub("%z", "")
         end
     end
 end
 
+-- Return configured SN first, then fallback hardware IDs for naming.
 function M.id(cfg)
-    -- 优先用用户配置的 SN，没有就退回 IMEI/MUID
     cfg = cfg or storage.get()
     if cfg.sn and #cfg.sn > 0 then
         return cfg.sn
@@ -22,12 +21,13 @@ function M.id(cfg)
     return mobileValue("imei") or mobileValue("muid") or "tinynav"
 end
 
+-- Return the modem IMEI when the firmware exposes it.
 function M.imei()
     return mobileValue("imei")
 end
 
+-- Build the AP SSID from the last characters of the device ID.
 function M.apSsid(cfg)
-    -- 热点名短一点，手机列表里更容易识别
     local id = M.id(cfg)
     local tail = id:match("([%w_%-]+)$") or id
     if #tail > 6 then

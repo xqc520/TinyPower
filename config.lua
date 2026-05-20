@@ -1,31 +1,53 @@
 local M = {}
 
--- 上电后热点配网窗口：5分钟
+-- AP config window.
 M.AP_WINDOW_MS = 5 * 60 * 1000
 M.AP_IP = "192.168.4.1"
 M.AP_NETMASK = "255.255.255.0"
 M.AP_GATEWAY = "192.168.4.1"
 M.AP_CHANNEL = 6
 M.AP_PASS = "12345678"
+M.CONFIG_REBOOT_DELAY_MS = 1500
 
--- GNSS 使用 UART2，按板子实际连线修改这里即可
+-- GNSS UART.
 M.GNSS_UART_ID = 2
 M.GNSS_BAUD = 115200
 M.GNSS_FIX_TIMEOUT_MS = 120 * 1000
 
--- 网络和 MQTT 超时
+-- Network and MQTT timeouts.
 M.NET_TIMEOUT_MS = 60 * 1000
 M.MQTT_TIMEOUT_MS = 45 * 1000
 M.MQTT_QOS = 1
 M.SM4_TIMEOUT_MS = 20 * 1000
 M.CA_FILE = "/luadb/rootCA.crt"
 
--- 默认上报周期和低功耗定时器
+-- Report interval and sleep.
 M.REPORT_INTERVAL_MS = 10 * 60 * 1000
 M.MIN_REPORT_INTERVAL_MS = 60 * 1000
 M.MAX_REPORT_INTERVAL_MS = 24 * 60 * 60 * 1000
 M.NO_CONFIG_RETRY_MS = 30 * 60 * 1000
+M.LOW_POWER_ENABLE = true
+M.SETUP_ON_NORMAL_BOOT = false
+M.BOOT_LOG_DELAY_MS = 3000
+M.PRE_SLEEP_LOG_DELAY_MS = 5000
+M.HIB_LOG_DELAY_MS = 300
 M.SLEEP_TIMER_ID = 2
 M.USE_HIB_SLEEP = true
+
+-- MQTT test mode skips AP window and uses a short loop when configured.
+M.MQTT_TEST_MODE = false
+M.MQTT_TEST_LOOP_MS = 30 * 1000
+M.MQTT_TEST_SUB_EXTRA = false
+M.MQTT_TEST_FORCE_SM4 = false
+M.MQTT_TEST_FAKE_GNSS = false
+M.MQTT_TEST_LOCATION = {
+    lat = 39.908823,
+    lng = 116.397470,
+    speed = 0,
+    course = 0,
+    sats = 10,
+    hdop = 0.8,
+    altitude = 50,
+}
 
 return M
