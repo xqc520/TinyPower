@@ -133,6 +133,12 @@ local function save(body)
     c.report_interval_ms = (tonumber(c.interval) or 600) * 1000
     local ok = storage.save(c)
     if ok then
+        local saved = storage.get()
+        logInfo("setup", "config saved",
+            "sn_len", saved.sn and #saved.sn or 0,
+            "host_len", saved.mqtt_host and #saved.mqtt_host or 0,
+            "port", tostring(saved.mqtt_port)
+        )
         scheduleRestart()
         return savedPage()
     end

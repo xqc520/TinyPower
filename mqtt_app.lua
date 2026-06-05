@@ -11,6 +11,25 @@ local function now()
     return os and os.time and os.time() or 0
 end
 
+local function waitValidTime(timeout)
+    timeout = timeout or 0
+    if now() >= 1600000000 then
+        return true
+    end
+
+    local waited = 0
+    while waited < timeout do
+        sys.wait(1000)
+        waited = waited + 1000
+        if now() >= 1600000000 then
+            log.info("mqtt", "time ready", now())
+            return true
+        end
+    end
+    log.warn("mqtt", "time not ready", now())
+    return false
+end
+
 -- Topic for encrypted realtime location/status uploads.
 local function realTimeTopic(cfg)
     return "sys/" .. cfg.sn .. "/json/up/realTime"
@@ -117,6 +136,15 @@ local function valueLen(v)
     return v and #tostring(v) or 0
 end
 
+-- JSON 数字本身没有“保留末尾 0”的概念，这里专门生成固定小数位的数字文本用于上报。
+local function fixedDecimalText(value, decimals)
+    local n = tonumber(value)
+    if not n or n ~= n or n == math.huge or n == -math.huge then
+        return nil
+    end
+    return string.format("%." .. tostring(decimals or 0) .. "f", n)
+end
+
 -- Publish a command response back to the server.
 local function resp(c, cfg, cmd, requestId, result, reason)
     local topic = upRespTopic(cfg)
@@ -126,7 +154,7 @@ local function resp(c, cfg, cmd, requestId, result, reason)
         result = result,
         reason = reason,
         sn = cfg.sn,
-        time = now(),
+        time = now()
     })
     log.info("mqtt", "up resp", payload)
     local mid = c:publish(topic, payload, 0, 0)
@@ -202,57 +230,113 @@ local function requestSm4(c, cfg)
 end
 
 -- Build the plaintext realtime JSON before SM4 encryption.
-local function locationPayload(cfg, loc)
-    return json.encode({
+local function locationPayload(cfg, loc, batteryVoltage, tcase)
+    if batteryVoltage == nil then
+        batteryVoltage = device.batteryVoltage()
+    end
+    if not batteryVoltage then
+        batteryVoltage = -1
+    end
+    local batteryVoltageText = fixedDecimalText(batteryVoltage, 2) or "-1.00"
+    if tcase == nil and device.tcaseTemperature then
+        tcase = device.tcaseTemperature()
+    end
+    if not tcase then
+        tcase = -1
+    end
+
+    local timestamp = tostring(now())
+    local sendFrequency = math.max(1, math.floor(cfg.report_interval_ms / 60000))
+    local batteryVoltagePlaceholder = "__BATTERY_VOLTAGE_FIXED_2__"
+    local payload = json.encode({
         SN = cfg.sn,
-        timeStamp = tostring(now()),
-        sendFrequency = math.max(1, math.floor(cfg.report_interval_ms / 60000)),
+        timeStamp = timestamp,
+        sendFrequency = sendFrequency,
+        tcase = tcase,
+        batteryVoltage = batteryVoltagePlaceholder,
         latitude = loc.lat,
         longitude = loc.lng,
     })
+    local fixedPayload, replaced = payload:gsub(
+        '("batteryVoltage"%s*:%s*)"' .. batteryVoltagePlaceholder .. '"',
+        "%1" .. batteryVoltageText,
+        1
+    )
+    if replaced == 0 then
+        log.warn("mqtt", "battery format patch failed")
+        return json.encode({
+            SN = cfg.sn,
+            timeStamp = timestamp,
+            sendFrequency = sendFrequency,
+            tcase = tcase,
+            batteryVoltage = tonumber(batteryVoltageText) or -1,
+            latitude = loc.lat,
+            longitude = loc.lng,
+        })
+    end
+    return fixedPayload
 end
 
 -- Connect, handle downlink, encrypt location, publish, then disconnect.
-function M.publishLocation(cfg, loc)
+function M.publishLocation(cfg, loc, batteryVoltage, tcase)
     if not net.waitReady(config.NET_TIMEOUT_MS) then
         log.warn("mqtt", "network timeout")
         return false
     end
 
-    log.info("mqtt", "connect", cfg.mqtt_host, cfg.mqtt_port, cfg.mqtt_ssl and "ssl" or "tcp")
-    local c = mqtt.create(nil, cfg.mqtt_host, cfg.mqtt_port, tlsConfig(cfg))
-    if not c then
-        log.warn("mqtt", "create failed")
-        return false
+    if cfg.mqtt_ssl then
+        waitValidTime(config.MQTT_TLS_TIME_WAIT_MS)
     end
 
-    local tag = "MQTT_" .. tostring(c)
-    c:auth(clientId(cfg), #cfg.mqtt_user > 0 and cfg.mqtt_user or nil, #cfg.mqtt_pass > 0 and cfg.mqtt_pass or nil, false)
-    c:keepalive(30)
-    c:autoreconn(false)
-    c:on(function(client, event, data, payload)
-        log.info("mqtt", "event", event, tostring(data))
-        if event == "conack" then
-            sys.publish(tag, "ready")
-        elseif event == "suback" then
-            sys.publish(tag, "suback", data)
-        elseif event == "recv" then
-            handleDown(client, cfg, tag, payload, data)
-        elseif event == "sent" then
-            sys.publish(tag, "sent", data)
-        elseif event == "disconnect" then
-            sys.publish(tag, "disconnect")
+    local c, tag
+    local retryCount = tonumber(config.MQTT_CONNECT_RETRY_COUNT) or 1
+    if retryCount < 1 then
+        retryCount = 1
+    end
+    for attempt = 1, retryCount do
+        log.info("mqtt", "connect", cfg.mqtt_host, cfg.mqtt_port, cfg.mqtt_ssl and "ssl" or "tcp", "attempt", attempt, retryCount)
+        c = mqtt.create(nil, cfg.mqtt_host, cfg.mqtt_port, tlsConfig(cfg))
+        if not c then
+            log.warn("mqtt", "create failed")
+        else
+            local thisTag = "MQTT_" .. tostring(c)
+            tag = thisTag
+            c:auth(clientId(cfg), #cfg.mqtt_user > 0 and cfg.mqtt_user or nil, #cfg.mqtt_pass > 0 and cfg.mqtt_pass or nil, false)
+            c:keepalive(30)
+            c:autoreconn(false)
+            c:on(function(client, event, data, payload)
+                log.info("mqtt", "event", event, tostring(data))
+                if event == "conack" then
+                    sys.publish(thisTag, "ready")
+                elseif event == "suback" then
+                    sys.publish(thisTag, "suback", data)
+                elseif event == "recv" then
+                    handleDown(client, cfg, thisTag, payload, data)
+                elseif event == "sent" then
+                    sys.publish(thisTag, "sent", data)
+                elseif event == "disconnect" then
+                    sys.publish(thisTag, "disconnect")
+                end
+            end)
+
+            local connectOk = c:connect()
+            log.info("mqtt", "connect start", connectOk and 1 or 0)
+            if connectOk and waitEvent(tag, "ready", config.MQTT_TIMEOUT_MS) then
+                log.info("mqtt", "connected")
+                break
+            end
+            log.warn("mqtt", "connect failed", cfg.mqtt_host, cfg.mqtt_port, "attempt", attempt)
+            c:close()
+            c = nil
+            tag = nil
         end
-    end)
-
-    local connectOk = c:connect()
-    log.info("mqtt", "connect start", connectOk and 1 or 0)
-    if not connectOk or not waitEvent(tag, "ready", config.MQTT_TIMEOUT_MS) then
-        log.warn("mqtt", "connect failed", cfg.mqtt_host, cfg.mqtt_port)
-        c:close()
+        if attempt < retryCount then
+            sys.wait(config.MQTT_CONNECT_RETRY_DELAY_MS or 5000)
+        end
+    end
+    if not c then
         return false
     end
-    log.info("mqtt", "connected")
 
     for _, topic in ipairs(downTopics(cfg)) do
         local subOk = c:subscribe(topic, 1)
@@ -275,7 +359,7 @@ function M.publishLocation(cfg, loc)
         end
     end
 
-    local plain = locationPayload(cfg, loc)
+    local plain = locationPayload(cfg, loc, batteryVoltage, tcase)
     log.info("mqtt", "up realTime", plain)
     local payload = sm4.encryptHex(plain, storage.getSm4())
     if not payload then
@@ -300,6 +384,13 @@ function M.publishLocation(cfg, loc)
         log.warn("mqtt", "publish ack timeout", tostring(mid))
     end
     log.info("mqtt", "send", ok and "ok" or "fail", "topic", topic, "mid", tostring(mid), "time", now())
+    if ok then
+        local downlinkWait = tonumber(config.POST_PUBLISH_DOWNLINK_WAIT_MS) or 0
+        if downlinkWait > 0 then
+            log.info("mqtt", "post publish downlink wait", downlinkWait, "ms")
+            sys.wait(downlinkWait)
+        end
+    end
     c:disconnect()
     c:close()
     return ok

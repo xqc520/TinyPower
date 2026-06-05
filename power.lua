@@ -1,28 +1,25 @@
 local config = require("config")
 
 local M = {}
-local modeReady = false
 
 -- 获取当前时间戳，只用于低功耗日志定位。
 local function now()
     return os and os.time and os.time() or 0
 end
 
--- 设置模块工作模式。
--- 注意：WORK_MODE=3 只是切换省电工作模式，不等于真正休眠。
--- 当前只在 LIGHT 兜底路径里使用，HIB 路径直接调用 pm.force(pm.HIB)。
-function M.init()
-    if modeReady then
-        return true
-    end
+local function setWorkMode(mode, label)
     if pm and pm.power and pm.WORK_MODE then
-        log.info("power", "mode set", 3)
-        pm.power(pm.WORK_MODE, 3)
-        modeReady = true
-        return true
+        local ok = pm.power(pm.WORK_MODE, mode)
+        log.info("power", label or "mode", mode, tostring(ok))
+        return ok
     end
     log.warn("power", "mode api missing")
     return false
+end
+
+-- 切回常规模式，唤醒后准备 GNSS/MQTT 前调用。
+function M.normalMode()
+    return setWorkMode(0, "mode normal")
 end
 
 -- 读取本次启动是否由深睡定时器唤醒。
@@ -38,58 +35,139 @@ function M.isTimerWake()
     return id and id >= 0
 end
 
--- 进入低功耗主流程：
--- 1. 关闭 AP/GNSS 等高功耗外设。
--- 2. 设置深睡唤醒定时器。
--- 3. 等待一小段时间，让串口日志先输出完整。
--- 4. 优先进入 HIB；如果固件不支持 HIB，再尝试 LIGHT。
-function M.sleep(ms)
-    local sec = math.floor((ms or 0) / 1000)
-    log.info("power", "sleep start", sec, "s", "time", now())
+-- 退出飞行模式，允许 4G 重新注册网络。
+function M.cellularOn()
+    if not config.CELLULAR_SLEEP_FLIGHT_MODE then
+        return
+    end
+    M.normalMode()
+    if mobile and mobile.flymode then
+        local ok, ret = pcall(mobile.flymode, 0, false)
+        log.info("power", "4g on", tostring(ok), tostring(ret))
+    else
+        log.warn("power", "4g api missing")
+    end
+end
 
-    -- 关闭热点，避免 WiFi AP 在休眠前继续耗电。
+-- 进入飞行模式，睡前关闭 4G 射频，避免没睡进去时 4G 继续耗电。
+function M.cellularOff()
+    if not config.CELLULAR_SLEEP_FLIGHT_MODE then
+        return
+    end
+    if sys and sys.publish then
+        sys.publish("IP_LOSE", nil, nil, "flight_mode")
+    end
+    if mobile and mobile.flymode then
+        local ok, ret = pcall(mobile.flymode, 0, true)
+        log.info("power", "4g off", tostring(ok), tostring(ret))
+    else
+        log.warn("power", "4g api missing")
+    end
+end
+
+local function stopAp()
+    local loaded = package and package.loaded
+    local wifiConfig = loaded and loaded["wifi_config"] or nil
+    if wifiConfig and wifiConfig.stop then
+        pcall(wifiConfig.stop)
+        return
+    end
     if wlan and wlan.stopAP then
-        wlan.stopAP()
+        pcall(wlan.stopAP)
+    end
+end
+
+local function setSensorPower(enabled)
+    if not config.PSM_DISABLE_SENSOR_POWER then
+        return
+    end
+    local pin = config.PSM_SENSOR_POWER_GPIO
+    if pin and gpio and gpio.setup then
+        local level = enabled and (config.PSM_SENSOR_POWER_ON_LEVEL or 1) or (config.PSM_SENSOR_POWER_OFF_LEVEL or 0)
+        gpio.setup(pin, level, gpio.PULLDOWN)
+        if gpio.set then
+            pcall(gpio.set, pin, level)
+        end
+        log.info("power", "sensor power", enabled and "on" or "off", pin, level)
+    end
+end
+
+-- 业务开始前恢复外部传感器/GNSS 相关电源，避免睡前拉低后醒来没有信号。
+function M.sensorPowerOn()
+    setSensorPower(true)
+end
+
+local function stopSensorPower()
+    setSensorPower(false)
+end
+
+-- 进入低功耗主流程：
+-- 1. 关闭 AP/GNSS/4G 等高功耗外设。
+-- 2. 设置深睡唤醒定时器。
+-- 3. 发布 DRV_SET_PSM，由 drv_psm.lua 完成 Air8000 PSM+ 配置和进入。
+function M.sleep(ms)
+    local sleepMs = ms or config.REPORT_INTERVAL_MS
+    local sec = math.floor(sleepMs / 1000)
+    log.info("power", "sleep start", sec, "s", "time", now())
+    local timerOk = false
+
+    if config.PSM_ONLY_TEST_MODE then
+        stopSensorPower()
+        if pm and pm.dtimerStart then
+            timerOk = pm.dtimerStart(config.SLEEP_TIMER_ID, sleepMs) and true or false
+            log.info("power", "minimal wake timer", "id", config.SLEEP_TIMER_ID, sec, "s", "ret", tostring(timerOk))
+        else
+            log.warn("power", "wake timer missing")
+        end
+        if not timerOk then
+            log.warn("power", "skip psm, wake timer failed")
+            sys.wait(sleepMs)
+            return
+        end
+        log.info("power", "minimal DRV_SET_PSM", "time", now())
+        require("drv_psm").enter()
+        return
     end
 
-    -- 关闭 GNSS 电源；gnss_app.close() 已做过一次，这里再兜底。
+    stopAp()
+
     if pm and pm.power and pm.GPS then
         pm.power(pm.GPS, false)
     end
 
-    -- 设置低功耗唤醒定时器，ms 到期后模块会重新从 main.lua 启动。
+    stopSensorPower()
+    M.cellularOff()
+
     if pm and pm.dtimerStart then
-        local ok = pm.dtimerStart(config.SLEEP_TIMER_ID, ms)
-        log.info("power", "wake timer", "id", config.SLEEP_TIMER_ID, sec, "s", "ret", tostring(ok))
+        timerOk = pm.dtimerStart(config.SLEEP_TIMER_ID, sleepMs) and true or false
+        log.info("power", "wake timer", "id", config.SLEEP_TIMER_ID, sec, "s", "ret", tostring(timerOk))
     else
         log.warn("power", "wake timer missing")
     end
+
+    if not timerOk then
+        log.warn("power", "skip psm, wake timer failed")
+        sys.wait(sleepMs)
+        return
+    end
+
     if config.PRE_SLEEP_LOG_DELAY_MS and config.PRE_SLEEP_LOG_DELAY_MS > 0 then
         log.info("power", "log flush", config.PRE_SLEEP_LOG_DELAY_MS, "ms")
         sys.wait(config.PRE_SLEEP_LOG_DELAY_MS)
     end
 
-    -- HIB 是真正的深睡入口，正常情况下调用后不会继续往下执行。
-    if config.USE_HIB_SLEEP and pm and pm.force and pm.HIB then
-        log.info("power", "enter hib", "time", now())
-        if config.HIB_LOG_DELAY_MS and config.HIB_LOG_DELAY_MS > 0 then
-            sys.wait(config.HIB_LOG_DELAY_MS)
+    if config.USE_PSM_PLUS_SLEEP then
+        log.info("power", "direct DRV_SET_PSM", "time", now())
+        local drvPsm = require("drv_psm")
+        if drvPsm and drvPsm.enter then
+            drvPsm.enter()
+            return
         end
-        local ok = pm.force(pm.HIB)
-        -- 如果还能打印到这里，说明 HIB 没有真正进入，需要继续查固件/API。
-        log.warn("power", "hib return", tostring(ok), "time", now())
-    elseif pm and pm.request and pm.LIGHT then
-        -- LIGHT 是兜底浅睡，功耗通常高于 HIB。
-        M.init()
-        log.info("power", "enter light", "time", now())
-        pm.request(pm.LIGHT)
-    else
-        log.warn("power", "sleep api missing")
+        log.warn("power", "drv_psm enter missing")
     end
 
-    -- 理论上 HIB 不会走到这里；走到这里说明没有进入深睡。
-    sys.wait(ms)
-    log.info("power", "sleep return", "time", now())
+    log.warn("power", "psm disabled")
+    sys.wait(sleepMs)
 end
 
 return M
