@@ -116,14 +116,14 @@ local function resp(c, cfg, cmd, requestId, result, reason)
     log.info("mqtt", "resp", topic, cmd, tostring(result), tostring(mid))
 end
 
--- 提取服务器下发的上报周期，具体字段兼容逻辑在 storage.lua。
+-- 提取服务器下发的上报周期，只识别 sendFrequency。
 local function intervalMs(msg)
-    return storage.reportIntervalMs(msg.config or msg)
+    return storage.reportIntervalMs(msg)
 end
 
--- set_config 可以把参数放在 config 子对象，也可以直接平铺在消息里。
+-- set_config 只接受 config 子对象，避免多种报文形态增加维护成本。
 local function configPayload(msg)
-    return type(msg.config) == "table" and msg.config or msg
+    return msg.config
 end
 
 -- 保存配置后的关键字段日志，现场串口能直接确认 TCP 配置是否生效。
@@ -132,13 +132,13 @@ local function logSavedConfig(saved)
         "sn_len", saved.sn and #saved.sn or 0,
         "tcp_host", saved.tcp_host,
         "tcp_port", tostring(saved.tcp_port),
-        "report_s", math.floor((saved.report_interval_ms or 0) / 1000)
+        "sendFrequency", tostring(saved.sendFrequency)
     )
 end
 
 -- 处理服务器下行命令：
 -- set_report_interval 只改上报频度；
--- set_config / set_tcp_config / set_device_id 等合并远程配置。
+-- set_config 合并远程配置。
 local function handleDown(c, cfg, payload, topic)
     log.info("mqtt", "down topic", tostring(topic), "len", valueLen(payload))
     local msg, err = decodeJson(payload)
@@ -148,7 +148,7 @@ local function handleDown(c, cfg, payload, topic)
     end
 
     log.info("mqtt", "down cmd", tostring(msg.cmd), tostring(msg.request_id))
-    if msg.cmd == "set_report_interval" or msg.cmd == "set_upload_frequency" then
+    if msg.cmd == "set_report_interval" then
         local ms = intervalMs(msg)
         if ms and storage.saveReportInterval(ms) then
             resp(c, cfg, msg.cmd, msg.request_id, 0, "ok")
@@ -158,7 +158,7 @@ local function handleDown(c, cfg, payload, topic)
             log.warn("mqtt", "bad interval", tostring(ms))
             resp(c, cfg, msg.cmd, msg.request_id, -1, "bad_interval")
         end
-    elseif msg.cmd == "set_config" or msg.cmd == "set_device_config" or msg.cmd == "set_tcp_config" or msg.cmd == "set_device_id" or msg.cmd == "set_tcp_server" then
+    elseif msg.cmd == "set_config" then
         local ok, saved, reason = storage.saveRemoteConfig(configPayload(msg))
         if ok then
             resp(c, cfg, msg.cmd, msg.request_id, 0, reason or "ok")

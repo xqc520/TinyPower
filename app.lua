@@ -132,12 +132,13 @@ end
 -- 执行一轮业务：读取配置 -> 采集状态 -> 等 4G 联网 -> GNSS 定位 -> MQTT 上报 -> 返回下一次间隔。
 local function workOnce()
     local cfg = storage.get()
+    local intervalMs = storage.reportIntervalMs(cfg) or config.REPORT_INTERVAL_MS
     if not storage.ready(cfg) then
         log.warn("app", "not configured")
         return nextDelay("no_config", config.NO_CONFIG_RETRY_MS)
     end
     log.info("app", "time now", now())
-    log.info("app", "cycle start", "report_s", math.floor((cfg.report_interval_ms or 0) / 1000))
+    log.info("app", "cycle start", "report_s", math.floor(intervalMs / 1000))
 
     -- 唤醒后先获取本轮要上报的状态信息。
     local batteryVoltage = readBatteryVoltage()
@@ -148,7 +149,7 @@ local function workOnce()
     log.info("app", "net start", math.floor(config.NET_TIMEOUT_MS / 1000), "s")
     if not net.waitReady(config.NET_TIMEOUT_MS) then
         log.warn("app", "net timeout")
-        return nextDelay("net_timeout", cfg.report_interval_ms)
+        return nextDelay("net_timeout", intervalMs)
     end
     log.info("app", "net ok")
 
@@ -163,7 +164,7 @@ local function workOnce()
         gnss.close()
         if not loc then
             log.warn("app", "gnss timeout")
-            return nextDelay("gnss_timeout", cfg.report_interval_ms)
+            return nextDelay("gnss_timeout", intervalMs)
         end
         log.info("app", "gnss ok", "lat", loc.lat, "lng", loc.lng)
     end
@@ -200,7 +201,8 @@ local function workOnce()
         end
     end
     log.info("app", "send", ok and "ok" or "fail", "time", now())
-    return nextDelay(ok and "publish_ok" or "publish_fail", storage.get().report_interval_ms)
+    local nextIntervalMs = storage.reportIntervalMs(storage.get()) or intervalMs
+    return nextDelay(ok and "publish_ok" or "publish_fail", nextIntervalMs)
 end
 
 -- 应用入口：初始化存储，判断启动来源，然后循环执行上报和低功耗。

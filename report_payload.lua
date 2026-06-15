@@ -35,7 +35,7 @@ function M.location(cfg, loc, batteryVoltage, tcase)
     end
 
     local timestamp = tostring(now())
-    local sendFrequency = math.max(1, math.floor(cfg.report_interval_ms / 60000))
+    local sendFrequency = math.max(1, math.floor(tonumber(cfg.sendFrequency) or 1))
     local batteryVoltagePlaceholder = "__BATTERY_VOLTAGE_FIXED_2__"
     -- 先用字符串占位，再替换成数字文本，保证 JSON 里 batteryVoltage 是数字而不是字符串。
     local payload = json.encode({
