@@ -2,53 +2,29 @@
 
 最后更新：2026-06-15
 
-本文档只保留服务器对接当前固件所需的必要内容。
+## 1. 连接概览
 
-## 1. MQTT 连接
+设备有两路连接。
 
-设备有两路连接：
+| 通道 | 用途 | 配置来源 | 说明 |
+| --- | --- | --- | --- |
+| 固定 MQTT | 后台上报、接收远程配置 | `config.lua` 写死 | 普通 TCP MQTT，默认端口 `1883`，不使用 TLS/MQTTS |
+| 第二路 TCP | 向可配置服务器发送同一份实时数据 | WiFi 热点或 MQTT 下发 | 未配置时跳过，不影响 MQTT |
 
-- MQTT：固件里的固定后台连接，使用普通 TCP MQTT，不启用 TLS/MQTTS，也不在 WiFi 热点页面配置。服务器地址、端口和账号密码由 `config.lua` 中的固定常量决定。
-- TCP：另一路可配置连接，IP/域名和端口可通过 WiFi 热点配置，也可通过 MQTT 下发配置。
-
-本地 AP 只配置设备 SN 和另一路 TCP 参数：
+WiFi 热点只配置：
 
 | 字段 | 说明 |
 | --- | --- |
-| `sn` | 设备 SN，也是 Topic 里的 `{SN}` |
-| `tcp_host` | 另一路 TCP 服务器 IP 或域名，可为空 |
-| `tcp_port` | 另一路 TCP 服务器端口，可为空 |
+| `sn` | 设备 SN，也是 MQTT Topic 中的 `{SN}` |
+| `tcp_host` | 第二路 TCP 服务器 IP 或域名 |
+| `tcp_port` | 第二路 TCP 服务器端口，范围 `1` 到 `65535` |
 
-连接参数：
-
-| 项 | 值 |
-| --- | --- |
-| Host/Port | 固件固定：`config.MQTT_HOST` / `config.MQTT_PORT`，默认端口 `1883` |
-| TLS/MQTTS | 关闭，固定普通 TCP MQTT |
-| Client ID | `<IMEI>mqtts1`，读不到 IMEI 时为 `<SN>mqtts1` |
-| Clean Session | `false` |
-| Keepalive | 30 秒 |
-| 实时上报 QoS | `1` |
-| 命令响应 QoS | `0` |
-
-## 2. 第二路 TCP 连接
-
-第二路 TCP 使用 `tcp_host` / `tcp_port`。如果未配置，设备会跳过该路连接；如果已配置，设备每轮会在 MQTT 上报和等待下发配置后，连接该 TCP 服务器并发送同一份实时上报 JSON。
-
-TCP 报文格式：
-
-```text
-JSON + \n
-```
-
-其中 JSON 内容与 `sys/{SN}/json/up/realTime` 的明文 JSON 完全一致。
-
-## 3. MQTT Topic
+## 2. MQTT Topic
 
 | 方向 | 功能 | Topic | Payload |
 | --- | --- | --- | --- |
 | 设备上行 | 实时定位上报 | `sys/{SN}/json/up/realTime` | 明文 JSON |
-| 设备上行 | 设备响应 / 主动请求 | `sys/{SN}/json/up/resp` | 明文 JSON |
+| 设备上行 | 命令响应 | `sys/{SN}/json/up/resp` | 明文 JSON |
 | 服务器下行 | 设备命令 | `sys/{SN}/json/down/cmd` | 明文 JSON |
 
 服务器建议订阅：
@@ -58,51 +34,35 @@ sys/+/json/up/realTime
 sys/+/json/up/resp
 ```
 
-## 4. 对接流程
+## 3. 上报流程
 
-1. 设备连接 MQTT，并订阅 `sys/{SN}/json/down/cmd`。
-2. 设备定位成功后，向 `sys/{SN}/json/up/realTime` 上报明文 JSON 定位数据。
-3. MQTT 上报成功后，设备会继续保持 MQTT 在线 2 秒，用来等待服务器下发上传频率或第二路 TCP 配置。
-4. 设备读取最新配置；如果 `tcp_host/tcp_port` 已配置，则连接第二路 TCP 并发送同一份明文 JSON。
-5. 设备断开 MQTT/TCP，进入等待或低功耗。
+1. 设备连接固定 MQTT，并订阅 `sys/{SN}/json/down/cmd`。
+2. 设备定位成功后，向 `sys/{SN}/json/up/realTime` 上报明文 JSON。
+3. MQTT 上报成功后，设备保持在线约 2 秒，用于接收服务器下发的频度或 TCP 配置。
+4. 设备读取最新配置；若 `tcp_host/tcp_port` 已配置，则连接第二路 TCP，并发送同一份明文 JSON。
+5. 设备断开连接，进入等待或低功耗。
 
-## 5. 实时上报
-
-Topic：
+第二路 TCP 报文格式：
 
 ```text
-sys/{SN}/json/up/realTime
+JSON + \n
 ```
 
-Payload 为明文 JSON：
+## 4. 实时上报 JSON
 
-```json
-{
-  "SN": "TN000001",
-  "timeStamp": "1770000000",
-  "sendFrequency": 10,
-  "tcase": 32.1,
-  "batteryVoltage": 12.10,
-  "latitude": 39.908823,
-  "longitude": 116.39747
-}
-```
+MQTT `realTime` 与第二路 TCP 使用相同 JSON。
 
-字段说明：
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `SN` | string | 设备 SN |
+| `timeStamp` | string | 设备当前 epoch 秒 |
+| `sendFrequency` | number | 当前上报频度，单位分钟 |
+| `tcase` | number | 机箱温度，单位摄氏度；读取失败为 `-1` |
+| `batteryVoltage` | number | 电池电压，单位 V；保留两位小数，读取失败为 `-1.00` |
+| `latitude` | number | 纬度 |
+| `longitude` | number | 经度 |
 
-| 字段 | 说明 |
-| --- | --- |
-| `SN` | 设备 SN |
-| `timeStamp` | 设备当前 epoch 秒 |
-| `sendFrequency` | 当前上传频率，单位分钟 |
-| `tcase` | 机箱温度，单位摄氏度 |
-| `batteryVoltage` | 电池电压，单位 V |
-| `latitude` | 纬度 |
-| `longitude` | 经度 |
-
-## 6. 下发上传频率
-
-服务器只需要按分钟下发。
+## 5. 下发上报频度
 
 Topic：
 
@@ -122,9 +82,9 @@ Payload：
 
 说明：
 
-- `sendFrequency=10` 表示每 10 分钟上报一次。
-- 设备会把周期限制在 1 分钟到 24 小时之间。
-- 服务器建议在收到 `realTime` 后立即下发，设备上报成功后会等待 2 秒再休眠。
+- `sendFrequency` 单位为分钟。
+- 设备会将频度限制在 1 分钟到 24 小时之间。
+- 也兼容 `report_interval_ms`、`interval_sec`、`report_interval_sec`、`upload_interval_sec`、`frequency`、`freq`。
 
 设备回包：
 
@@ -139,9 +99,7 @@ Payload：
 }
 ```
 
-### 6.1 远程修改设备配置
-
-设备支持通过同一个下行 Topic 远程修改设备 ID、另一路 TCP 服务器 IP/域名、TCP 端口和上报频度。MQTT 连接保持固定，远程配置不会修改 MQTT 服务器参数。服务器可以只下发需要修改的字段，未下发的字段会保持原值。
+## 6. 远程修改设备配置
 
 Topic：
 
@@ -166,12 +124,13 @@ Payload：
 
 说明：
 
-- `device_id` 也可使用 `sn`、`SN`、`deviceId`、`devId`。
-- `tcp_host` 可填写 IP 或域名，也可使用 `tcp_server`、`tcp_domain`、`tcp_ip`、`host`、`server`、`domain`、`ip`。
-- `tcp_port` 也可使用 `tcp_server_port`、`config_port`、`port`，范围为 `1` 到 `65535`。
-- `sendFrequency` 单位为分钟；也支持 `report_interval_ms`、`interval_sec` 等上传频率字段。
-- 设备收到命令后会先用旧 SN 对应的 `up/resp` Topic 回包，再保存新配置；新设备 ID 会在下一次 MQTT 连接时生效，新的 TCP 地址和端口会在下一次使用该 TCP 通道时生效。
-- 上报成功后设备默认继续保持 MQTT 在线 2 秒，服务器应在收到 `realTime` 后尽快下发远程配置。
+- 只更新下发中出现的字段，未出现字段保持原值。
+- `device_id` 也兼容 `sn`、`SN`、`deviceId`、`devId`。
+- `tcp_host` 也兼容 `tcp_server`、`tcp_domain`、`tcp_ip`、`host`、`server`、`domain`、`ip`。
+- `tcp_port` 也兼容 `tcp_server_port`、`config_port`、`port`。
+- `sendFrequency` 规则同“下发上报频度”。
+- MQTT 服务器参数固定在固件中，远程配置不会修改 MQTT 地址、端口或认证信息。
+- 设备会先用旧 SN 回包，再保存新配置；新 SN 在下一次 MQTT 连接时生效。
 
 设备回包：
 
@@ -186,25 +145,19 @@ Payload：
 }
 ```
 
-也可以按功能使用更窄的命令名：`set_device_config`、`set_tcp_config`、`set_device_id`、`set_tcp_server`。
+等价命令名：`set_device_config`、`set_tcp_config`、`set_device_id`、`set_tcp_server`。
 
-## 7. mosquitto 示例
+## 7. 错误回包
 
-订阅：
+命令失败时 `result=-1`，`reason` 为失败原因。
 
-```bash
-mosquitto_sub -h 127.0.0.1 -p 1883 -t "sys/+/json/up/resp" -v
-mosquitto_sub -h 127.0.0.1 -p 1883 -t "sys/+/json/up/realTime" -v
-```
+常见原因：
 
-下发 10 分钟上传频率：
-
-```bash
-mosquitto_pub -h 127.0.0.1 -p 1883 -t "sys/TN000001/json/down/cmd" -m "{\"cmd\":\"set_report_interval\",\"request_id\":\"interval-001\",\"sendFrequency\":10}"
-```
-
-远程修改设备 ID、TCP 服务器域名和端口：
-
-```bash
-mosquitto_pub -h 127.0.0.1 -p 1883 -t "sys/TN000001/json/down/cmd" -m "{\"cmd\":\"set_config\",\"request_id\":\"cfg-001\",\"config\":{\"device_id\":\"TN000002\",\"tcp_host\":\"tcp.example.com\",\"tcp_port\":9000,\"sendFrequency\":10}}"
-```
+| reason | 含义 |
+| --- | --- |
+| `bad_interval` | 上报频度字段不存在或无法解析 |
+| `bad_sn` | 设备 ID 为空 |
+| `bad_tcp_host` | TCP 地址为空 |
+| `bad_tcp_port` | TCP 端口非法 |
+| `empty_config` | 没有可更新字段 |
+| `bad_config` | 配置对象格式错误 |

@@ -2,7 +2,7 @@ local config = require("config")
 local device = require("device")
 local storage = require("storage")
 
--- Load optional firmware modules without breaking startup.
+-- 尝试加载可选固件模块，缺失时不影响主流程启动。
 local function optionalRequire(name)
     local ok, mod = pcall(require, name)
     if not ok then
@@ -39,7 +39,7 @@ local PROBE_URIS = {
     ["/fwlink/"] = true
 }
 
--- Decode URL form text from the config page.
+-- 解码配置页提交的 URL 表单文本。
 local function urlDecode(s)
     s = (s or ""):gsub("+", " ")
     return (s:gsub("%%(%x%x)", function(h)
@@ -47,7 +47,7 @@ local function urlDecode(s)
     end))
 end
 
--- Parse form-urlencoded POST body into a table.
+-- 将 application/x-www-form-urlencoded 请求体解析成 Lua 表。
 local function readForm(body)
     local t = {}
     for pair in tostring(body or ""):gmatch("[^&]+") do
@@ -57,7 +57,7 @@ local function readForm(body)
     return t
 end
 
--- Escape user-controlled values before writing HTML.
+-- 写入 HTML 前转义用户输入，避免特殊字符破坏页面结构。
 local function html(s)
     return tostring(s or "")
         :gsub("&", "&amp;")
@@ -66,12 +66,12 @@ local function html(s)
         :gsub('"', "&quot;")
 end
 
--- Build the local AP setup URL.
+-- 本地热点配置页 URL。
 local function apUrl()
     return "http://" .. config.AP_IP .. "/"
 end
 
--- Render the setup form with current saved values.
+-- 渲染本地热点配置页：只开放 SN 和第二路 TCP 参数，固定 MQTT 不在这里配置。
 local function page(msg)
     local c = storage.get()
     local tcpPort = (c.tcp_port and c.tcp_port > 0) and c.tcp_port or ""
@@ -90,7 +90,7 @@ button{width:100%;height:44px;border:0;border-radius:6px;background:#1463ff;colo
 <button type="submit">&#20445;&#23384;</button></form></main></body></html>]]
 end
 
--- Render a simple success page before reboot.
+-- 浏览器收到保存成功页后，设备再重启应用新配置。
 local function savedPage()
     return [[<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>TinyNav &#37197;&#32593;</title>
@@ -102,7 +102,7 @@ h2{margin-top:18px}.ok{font-size:44px;color:#19723b;margin:22px 0 8px}p{line-hei
 </main></body></html>]]
 end
 
--- Reboot after the browser has received the saved page.
+-- 延迟重启，避免手机还没收到 HTTP 响应设备就重启。
 local function scheduleRestart()
     if restartScheduled then
         return
@@ -121,7 +121,8 @@ local function scheduleRestart()
     end, config.CONFIG_REBOOT_DELAY_MS or 1500)
 end
 
--- Save submitted AP device/TCP configuration.
+-- 保存热点提交的 SN 和第二路 TCP 参数。
+-- 先读取旧配置再覆盖，避免 WiFi 重配时把 MQTT 下发的上报频度清掉。
 local function save(body)
     local form = readForm(body)
     local c = storage.get()
@@ -142,12 +143,12 @@ local function save(body)
     return page("Save failed")
 end
 
--- Normalize HTTP response tuple values.
+-- 统一 HTTP 响应三元组。
 local function reply(code, headers, body)
     return code, headers or {}, body or ""
 end
 
--- Redirect captive-portal probes back to the setup page.
+-- 将系统联网探测请求重定向到配置页，便于手机自动弹出门户。
 local function captiveRedirect()
     return reply(302, {
         Location = apUrl(),
@@ -157,7 +158,7 @@ local function captiveRedirect()
     }, '<html><head><meta http-equiv="refresh" content="0;url=' .. apUrl() .. '"></head><body>Redirecting...</body></html>')
 end
 
--- HTTP router for setup, save, and captive-portal probes.
+-- HTTP 路由：配置页、保存接口和强制门户探测。
 local function handler(client, method, uri, headers, body)
     uri = (uri or "/"):match("^[^?]*")
     if method == "GET" and PROBE_URIS[uri] then
@@ -172,33 +173,33 @@ local function handler(client, method, uri, headers, body)
     return reply(200, { ["Content-Type"] = "text/html; charset=utf-8" }, page(""))
 end
 
--- Return the LuatOS AP network adapter id.
+-- 获取 LuatOS AP 网卡适配器 ID。
 local function apAdapter()
     return socket and socket.LWIP_AP
 end
 
--- Safe wrapper around log.warn.
+-- log.warn 安全包装，兼容日志模块未就绪的情况。
 local function logWarn(...)
     if log and log.warn then
         log.warn(...)
     end
 end
 
--- Safe wrapper around log.info.
+-- log.info 安全包装。
 local function logInfo(...)
     if log and log.info then
         log.info(...)
     end
 end
 
--- Safe wrapper around log.error.
+-- log.error 安全包装。
 local function logError(...)
     if log and log.error then
         log.error(...)
     end
 end
 
--- Split dotted IPv4 text into numeric octets.
+-- 将点分 IPv4 文本拆成数字数组。
 local function ipParts(ip)
     local a, b, c, d = tostring(ip or ""):match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
     if not a then
@@ -207,17 +208,17 @@ local function ipParts(ip)
     return { tonumber(a), tonumber(b), tonumber(c), tonumber(d) }
 end
 
--- Convert IPv4 octets into raw bytes.
+-- 将 IPv4 数字数组编码成 4 字节网络序。
 local function ipBytes(ip)
     return string.char(ip[1], ip[2], ip[3], ip[4])
 end
 
--- Encode a 16-bit integer in network byte order.
+-- 按网络序编码 16 位整数。
 local function toU16(n)
     return string.char((n >> 8) & 0xFF, n & 0xFF)
 end
 
--- Encode a 32-bit integer in network byte order.
+-- 按网络序编码 32 位整数。
 local function toU32(n)
     return string.char(
         (n >> 24) & 0xFF,
@@ -227,7 +228,7 @@ local function toU32(n)
     )
 end
 
--- Read a 16-bit integer from a raw byte string.
+-- 从原始字节串读取网络序 16 位整数。
 local function readU16(s, pos)
     local a, b = s:byte(pos, pos + 1)
     if not a or not b then
@@ -236,7 +237,7 @@ local function readU16(s, pos)
     return a * 256 + b
 end
 
--- Convert LuatOS remote IP bytes into dotted IPv4 text.
+-- 将 LuatOS 远端 IP 字节格式转为点分 IPv4 文本。
 local function remoteIpToString(remoteIp)
     if remoteIp and #remoteIp == 5 then
         return string.format("%d.%d.%d.%d", remoteIp:byte(2), remoteIp:byte(3), remoteIp:byte(4), remoteIp:byte(5))
@@ -244,7 +245,7 @@ local function remoteIpToString(remoteIp)
     return nil
 end
 
--- Build a DNS answer that points captive checks to the AP IP.
+-- 构造 DNS 应答，把强制门户探测域名指向本机 AP IP。
 local function buildDnsResponse(query)
     if not query or #query < 17 then
         return nil
@@ -298,7 +299,7 @@ local function buildDnsResponse(query)
         answer
 end
 
--- Start raw-socket DNS for captive portal auto-open.
+-- 启动 raw-socket DNS，用于手机强制门户自动弹出。
 local function startCaptiveDns(adapter)
     if captiveDns then
         return true
@@ -309,7 +310,7 @@ local function startCaptiveDns(adapter)
     end
 
     local rxBuff = zbuff.create(1500)
-    -- Receive DNS datagrams and send AP-IP answers.
+    -- 接收 DNS 请求并回复 AP 地址。
     local function onDnsRequest(sc, event)
         if event ~= socket.EVENT then
             return
@@ -347,7 +348,7 @@ local function startCaptiveDns(adapter)
     return true
 end
 
--- Close the captive DNS socket.
+-- 关闭强制门户 DNS socket。
 local function stopCaptiveDns()
     if not captiveDns then
         return
@@ -359,7 +360,7 @@ local function stopCaptiveDns()
     captiveDns = nil
 end
 
--- Decode a DHCP packet from a zbuff into a Lua table.
+-- 将 zbuff 中的 DHCP 报文解析成 Lua 表。
 local function dhcpDecode(buff)
     local pkg = {}
     pkg.op = buff[0]
@@ -411,7 +412,7 @@ local function dhcpDecode(buff)
     return pkg
 end
 
--- Encode a DHCP packet table back into a zbuff.
+-- 将 DHCP Lua 表重新编码进 zbuff。
 local function dhcpEncode(pkg, buff)
     buff:seek(0)
     buff[0] = pkg.op
@@ -439,7 +440,7 @@ local function dhcpEncode(pkg, buff)
     buff:write(0xFF, 0x00)
 end
 
--- Send DHCP offer/ack/nack to a client.
+-- 向客户端发送 DHCP offer/ack/nack。
 local function dhcpSendReply(srv, pkg, client, msgtype)
     local buff = zbuff.create(300)
     local gw = srv.opts.gw
@@ -470,7 +471,7 @@ local function dhcpSendReply(srv, pkg, client, msgtype)
     end
 end
 
--- Allocate or reuse an IP address for a DHCP discover.
+-- 为 DHCP discover 分配或复用 IP 地址。
 local function dhcpHandleDiscover(srv, pkg)
     local mac = pkg.chaddr:sub(1, pkg.hlen)
     for _, client in pairs(srv.clients) do
@@ -498,7 +499,7 @@ local function dhcpHandleDiscover(srv, pkg)
     dhcpSendReply(srv, pkg, client, 2)
 end
 
--- Confirm a known DHCP lease request.
+-- 确认已知客户端的 DHCP 租约请求。
 local function dhcpHandleRequest(srv, pkg)
     local mac = pkg.chaddr:sub(1, pkg.hlen)
     for _, client in pairs(srv.clients) do
@@ -512,7 +513,7 @@ local function dhcpHandleRequest(srv, pkg)
     dhcpSendReply(srv, pkg, { ip = 0 }, 6)
 end
 
--- Process datagrams delivered by udpsrv-based DHCP backend.
+-- 处理 udpsrv 后端收到的 DHCP 数据报。
 local function dhcpTask(srv)
     while not srv.closed do
         local ok, data = sys.waitUntil(srv.udp_topic, 1000)
@@ -529,7 +530,7 @@ local function dhcpTask(srv)
     end
 end
 
--- Create a DHCP server using udpsrv or raw socket fallback.
+-- 创建 DHCP 服务：优先 udpsrv，缺失时退回 raw socket。
 local function createInlineDhcp(opts)
     opts = opts or {}
     opts.mark = opts.mark or { 255, 255, 255, 0 }
@@ -546,7 +547,7 @@ local function createInlineDhcp(opts)
             closed = false
         }
         local rxBuff = zbuff.create(1500)
-        -- Raw socket callback used when udpsrv is not available.
+        -- udpsrv 不可用时使用 raw socket 回调。
         local function onDhcpSocket(sc, event)
             logInfo("dhcp", "socket event", event)
             if event ~= socket.EVENT or srv.closed then
@@ -585,7 +586,7 @@ local function createInlineDhcp(opts)
         local ok, ready = socket.connect(srv.ctrl, "255.255.255.255", 0)
         logInfo("setup", "socket dhcp connect", ok, ready)
 
-        -- Close the raw-socket DHCP backend.
+        -- 关闭 raw-socket DHCP 后端。
         function srv:close()
             if self.closed then
                 return
@@ -615,7 +616,7 @@ local function createInlineDhcp(opts)
     end
 
     sys.taskInit(dhcpTask, srv)
-    -- Close the udpsrv DHCP backend and wake its task.
+    -- 关闭 udpsrv DHCP 后端，并唤醒等待中的任务退出。
     function srv:close()
         if self.closed then
             return
@@ -631,7 +632,7 @@ local function createInlineDhcp(opts)
     return srv
 end
 
--- Configure AP IP, DHCP, and captive DNS.
+-- 配置 AP IP、DHCP 和强制门户 DNS。
 local function setupApNetwork()
     local adapter = apAdapter()
     if not adapter then
@@ -693,7 +694,7 @@ local function setupApNetwork()
     return true
 end
 
--- Stop HTTP, DNS, DHCP, and AP radio.
+-- 停止 HTTP、DNS、DHCP 和 AP 射频。
 function M.stop()
     if not M.running then
         return
@@ -719,7 +720,7 @@ function M.stop()
     logInfo("setup", "ap stopped")
 end
 
--- Start the AP, trying secure mode first when a password is supplied.
+-- 启动 AP；有密码时优先尝试加密热点。
 local function startAp(ssid, password)
     if wlan and wlan.createAP then
         local ok, ret, err = pcall(wlan.createAP, ssid, password)
@@ -731,7 +732,7 @@ local function startAp(ssid, password)
     return false, "wlan.createAP unavailable"
 end
 
--- Open the config portal and keep it alive for AP_WINDOW_MS.
+-- 打开配置门户，并在 AP_WINDOW_MS 时间窗口内保持可访问。
 function M.startWindow()
     if M.running then
         return true

@@ -3,12 +3,13 @@ local config = require("config")
 local M = {}
 local KEY = "cfg"
 
--- Trim user input before saving or comparing it.
+-- 去掉用户输入两端空白，避免 SN/域名保存后 topic 或连接地址异常。
 local function trim(v)
     v = tostring(v or "")
     return (v:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+-- 上报周期统一在存储层限幅，WiFi 配置和 MQTT 下发走同一套规则。
 local function boundedReportInterval(ms)
     ms = tonumber(ms)
     if not ms then
@@ -22,6 +23,7 @@ local function boundedReportInterval(ms)
     return math.floor(ms)
 end
 
+-- 远程命令允许多个兼容字段名，这里按顺序取第一个存在的字段。
 local function findField(t, names)
     for _, name in ipairs(names) do
         if t[name] ~= nil then
@@ -31,6 +33,7 @@ local function findField(t, names)
     return false, nil
 end
 
+-- TCP/MQTT 端口都走同一个校验，避免 0 或超范围端口落盘。
 local function validPort(v)
     local port = tonumber(v)
     if not port then
@@ -55,6 +58,7 @@ local INTERVAL_FIELDS = {
     "freq",
 }
 
+-- 第二路 TCP 只保存 host/port，来源可以是 WiFi 热点或 MQTT 下发。
 local function cleanTcpHost(c)
     return trim(c.tcp_host or c.tcp_server or c.tcp_domain or c.tcp_ip)
 end
@@ -63,6 +67,8 @@ local function cleanTcpPort(c)
     return validPort(c.tcp_port or c.tcp_server_port or c.config_port) or 0
 end
 
+-- MQTT 是固件固定后台连接：优先使用 config.lua 写死的地址。
+-- 兼容旧配置里的 mqtt_host，只是为了老设备升级后仍能启动。
 local function fixedMqttHost(c)
     local host = trim(config.MQTT_HOST)
     if #host > 0 then
@@ -71,10 +77,12 @@ local function fixedMqttHost(c)
     return trim(c.mqtt_host or c.host)
 end
 
+-- MQTT 默认普通 1883；不会从 WiFi 热点页面修改。
 local function fixedMqttPort(c)
     return validPort(config.MQTT_PORT) or validPort(c.mqtt_port or c.port) or 1883
 end
 
+-- 用户名/密码同样来自固件常量；为空字符串表示无认证。
 local function fixedMqttUser(c)
     local user = config.MQTT_USER
     if user ~= nil then
@@ -83,6 +91,7 @@ local function fixedMqttUser(c)
     return trim(c.mqtt_user or c.user)
 end
 
+-- 保留旧配置兜底，便于旧版本升级；新版本不再通过 WiFi 修改 MQTT 密码。
 local function fixedMqttPass(c)
     local pass = config.MQTT_PASS
     if pass ~= nil then
@@ -91,7 +100,8 @@ local function fixedMqttPass(c)
     return trim(c.mqtt_pass or c.pass)
 end
 
--- Normalize config from old/new field names into one stable shape.
+-- 归一化后的配置结构是全项目唯一入口：
+-- 固定 MQTT 参数来自 config.lua；SN/TCP/上报周期来自持久化配置。
 function M.clean(c)
     c = c or {}
     local interval = boundedReportInterval(c.report_interval_ms or c.interval) or config.REPORT_INTERVAL_MS
@@ -108,7 +118,7 @@ function M.clean(c)
     }
 end
 
--- Extract a report interval from supported server command shapes.
+-- 从服务器下发的多种字段格式里提取上报周期，返回毫秒。
 function M.reportIntervalMs(c)
     c = c or {}
     if c.report_interval_ms or c.upload_interval_ms then
@@ -122,12 +132,12 @@ function M.reportIntervalMs(c)
     return min and min * 60 * 1000 or nil
 end
 
--- Initialize persistent key-value storage.
+-- 初始化 LuatOS 持久化 KV。
 function M.init()
     return fskv and fskv.init()
 end
 
--- Load and normalize saved device configuration.
+-- 读取并归一化设备配置，调用方不直接使用原始 KV 表。
 function M.get()
     local c = fskv and fskv.get(KEY)
     if type(c) ~= "table" then
@@ -136,13 +146,13 @@ function M.get()
     return M.clean(c)
 end
 
--- Save normalized device configuration.
+-- 保存前再次归一化，保证旧字段或表单字段不会原样污染配置。
 function M.save(c)
     c = M.clean(c)
     return fskv and fskv.set(KEY, c), c
 end
 
--- Save a bounded report interval from server commands.
+-- 保存服务器下发的上报周期。
 function M.saveReportInterval(ms)
     ms = boundedReportInterval(ms)
     if not ms then
@@ -153,7 +163,8 @@ function M.saveReportInterval(ms)
     return M.save(c), c
 end
 
--- Merge remote configuration fields into the saved device configuration.
+-- 合并服务器远程配置。
+-- 只更新命令里明确出现的字段，未下发的 SN/TCP/周期保持原值。
 function M.saveRemoteConfig(update)
     update = update or {}
     if type(update) ~= "table" then
@@ -209,13 +220,13 @@ function M.saveRemoteConfig(update)
     return M.save(c), c, "ok"
 end
 
--- Check whether minimum MQTT config is present.
+-- 固定 MQTT 上报必须具备 SN 和固件内置 MQTT 地址。
 function M.ready(c)
     c = c or M.get()
     return #c.sn > 0 and #c.mqtt_host > 0 and c.mqtt_port > 0
 end
 
--- Check whether the independent TCP server config is present.
+-- 第二路 TCP 是可选通道，配置完整才会尝试连接。
 function M.tcpReady(c)
     c = c or M.get()
     return #c.tcp_host > 0 and c.tcp_port > 0

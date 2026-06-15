@@ -23,17 +23,18 @@ M.MQTT_CONNECT_RETRY_COUNT = 2
 M.MQTT_CONNECT_RETRY_DELAY_MS = 5 * 1000
 M.PUBLISH_RETRY_COUNT = 3
 M.PUBLISH_RETRY_DELAY_MS = 15 * 1000
--- Fixed plain MQTT background connection. This is not exposed in the WiFi setup page.
+-- 固定后台 MQTT 连接，不在 WiFi 热点页面配置；普通 TCP MQTT，不使用 TLS。
 M.MQTT_HOST = ""
 M.MQTT_PORT = 1883
 M.MQTT_USER = ""
 M.MQTT_PASS = ""
--- Keep MQTT online briefly after a successful upload so server config commands can arrive.
+-- MQTT 上报成功后保持在线一小段时间，方便服务器立刻下发配置。
 M.POST_PUBLISH_DOWNLINK_WAIT_MS = 2 * 1000
--- Optional second TCP upload channel, configured by WiFi AP or MQTT downlink.
+-- 第二路 TCP 上报通道，由 WiFi 热点或 MQTT 下发配置。
 M.TCP_CONNECT_TIMEOUT_MS = 20 * 1000
 M.TCP_TX_WAIT_MS = 3 * 1000
 M.TCP_CLOSE_DELAY_MS = 200
+-- TCP 服务器按行读取时保留换行；如服务器使用定长/自定义协议，可改这里。
 M.TCP_PAYLOAD_SUFFIX = "\n"
 
 -- 电池电压采样：VBAT+ -- R21(170K) -- ADC0 -- R27(10K) -- GND。

@@ -179,9 +179,11 @@ local function workOnce()
     local tcpDone = false
     for attempt = 1, retryCount do
         log.info("app", "send attempt", attempt, retryCount, "time", now())
+        -- 固定 MQTT 先发，成功后会短暂在线等待服务器下发新的 TCP/SN/频度配置。
         if not mqttDone then
             mqttDone = mqttApp.publishLocation(cfg, loc, batteryVoltage, tcase)
         end
+        -- TCP 走最新配置：如果 MQTT 刚下发了 tcp_host/tcp_port，本轮即可使用。
         if not tcpDone then
             local tcpCfg = storage.get()
             tcpDone = tcpApp.publishLocation(tcpCfg, loc, batteryVoltage, tcase)

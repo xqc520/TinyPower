@@ -6,37 +6,37 @@ local storage = require("storage")
 
 local M = {}
 
--- Return current epoch seconds, or zero if RTC is unavailable.
+-- 当前 epoch 秒；RTC 未就绪时返回 0，日志和回包仍保持可解析。
 local function now()
     return os and os.time and os.time() or 0
 end
 
--- Topic for plaintext realtime location/status uploads.
+-- 明文实时定位/状态上报 topic。
 local function realTimeTopic(cfg)
     return "sys/" .. cfg.sn .. "/json/up/realTime"
 end
 
--- Topic for device responses and active requests.
+-- 设备响应 topic，用于回复服务器下发命令。
 local function upRespTopic(cfg)
     return "sys/" .. cfg.sn .. "/json/up/resp"
 end
 
--- Main downlink command topic for the configured SN.
+-- 当前 SN 对应的服务器下行命令 topic。
 local function downCmdTopic(cfg)
     return "sys/" .. cfg.sn .. "/json/down/cmd"
 end
 
--- Alternate downlink response topic used only during diagnostics.
+-- 诊断模式下额外订阅的下行响应 topic。
 local function downRespTopic(sn)
     return "sys/" .. sn .. "/json/down/resp"
 end
 
--- Build a command topic for an explicit SN or IMEI.
+-- 按指定 SN/IMEI 构造命令 topic，便于测试模式兼容硬件标识。
 local function downCmdTopicBySn(sn)
     return "sys/" .. sn .. "/json/down/cmd"
 end
 
--- Add a topic once while preserving subscription order.
+-- 保持订阅顺序，同时避免重复订阅同一个 topic。
 local function addTopic(list, seen, topic)
     if topic and not seen[topic] then
         seen[topic] = true
@@ -44,7 +44,7 @@ local function addTopic(list, seen, topic)
     end
 end
 
--- Return command topics to subscribe; test mode widens the net.
+-- 生产模式只订阅当前 SN；测试模式可以额外监听 IMEI/topic，方便联调。
 local function downTopics(cfg)
     local list, seen = {}, {}
     addTopic(list, seen, downCmdTopic(cfg))
@@ -59,7 +59,7 @@ local function downTopics(cfg)
     return list
 end
 
--- Wait for a specific MQTT callback event published by this module.
+-- 等待本模块 MQTT 回调发布的指定事件。
 local function waitEvent(tag, want, timeout, expect)
     local waited = 0
     while waited < timeout do
@@ -81,12 +81,12 @@ local function waitEvent(tag, want, timeout, expect)
     return false
 end
 
--- Follow the protocol client ID rule for MQTT1.
+-- MQTT client id 按协议规则生成：优先 IMEI，读不到时使用 SN。
 local function clientId(cfg)
     return (device.imei() or cfg.sn) .. "mqtts1"
 end
 
--- Decode JSON defensively and return a reason on failure.
+-- 安全解析下行 JSON，失败时返回原因用于日志。
 local function decodeJson(payload)
     local ok, t = pcall(json.decode, payload or "")
     if ok and type(t) == "table" then
@@ -95,12 +95,12 @@ local function decodeJson(payload)
     return nil, ok and "not_table" or tostring(t)
 end
 
--- Return text length without failing on nil values.
+-- 日志里打印长度时兼容 nil。
 local function valueLen(v)
     return v and #tostring(v) or 0
 end
 
--- Publish a command response back to the server.
+-- 回复服务器命令处理结果。这里仍使用旧 cfg.sn，确保改 SN 命令能回到原 topic。
 local function resp(c, cfg, cmd, requestId, result, reason)
     local topic = upRespTopic(cfg)
     local payload = json.encode({
@@ -116,15 +116,17 @@ local function resp(c, cfg, cmd, requestId, result, reason)
     log.info("mqtt", "resp", topic, cmd, tostring(result), tostring(mid))
 end
 
--- Extract a report interval from supported server command shapes.
+-- 提取服务器下发的上报周期，具体字段兼容逻辑在 storage.lua。
 local function intervalMs(msg)
     return storage.reportIntervalMs(msg.config or msg)
 end
 
+-- set_config 可以把参数放在 config 子对象，也可以直接平铺在消息里。
 local function configPayload(msg)
     return type(msg.config) == "table" and msg.config or msg
 end
 
+-- 保存配置后的关键字段日志，现场串口能直接确认 TCP 配置是否生效。
 local function logSavedConfig(saved)
     log.info("mqtt", "config saved",
         "sn_len", saved.sn and #saved.sn or 0,
@@ -134,7 +136,9 @@ local function logSavedConfig(saved)
     )
 end
 
--- Handle one downlink JSON message from the server.
+-- 处理服务器下行命令：
+-- set_report_interval 只改上报频度；
+-- set_config / set_tcp_config / set_device_id 等合并远程配置。
 local function handleDown(c, cfg, payload, topic)
     log.info("mqtt", "down topic", tostring(topic), "len", valueLen(payload))
     local msg, err = decodeJson(payload)
@@ -170,7 +174,11 @@ local function handleDown(c, cfg, payload, topic)
     end
 end
 
--- Connect, handle downlink, publish plaintext location, then disconnect.
+-- 固定 MQTT 后台连接：
+-- 1. 连接写死的 MQTT 服务器；
+-- 2. 订阅下行命令；
+-- 3. 明文上报实时数据；
+-- 4. 成功后保持在线 2 秒，给服务器下发配置窗口。
 function M.publishLocation(cfg, loc, batteryVoltage, tcase)
     if not net.waitReady(config.NET_TIMEOUT_MS) then
         log.warn("mqtt", "network timeout")
