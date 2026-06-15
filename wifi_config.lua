@@ -74,24 +74,19 @@ end
 -- Render the setup form with current saved values.
 local function page(msg)
     local c = storage.get()
-    local ssl = c.mqtt_ssl and " checked" or ""
-    local interval = math.floor(c.report_interval_ms / 1000)
+    local tcpPort = (c.tcp_port and c.tcp_port > 0) and c.tcp_port or ""
     return [[<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>TinyNav &#37197;&#32593;</title>
 <style>body{font-family:Arial,sans-serif;margin:0;background:#f7f8fa;color:#222}
 main{max-width:420px;margin:auto;padding:22px}label{display:block;margin:12px 0 6px}
 input{box-sizing:border-box;width:100%;height:42px;padding:0 10px;border:1px solid #ccc;border-radius:6px;font-size:16px}
-.row{display:flex;gap:10px}.row div{flex:1}.ck{display:flex;gap:8px;align-items:center;margin:14px 0}.ck input{width:auto;height:auto}
+.row{display:flex;gap:10px}.row div{flex:1}
 button{width:100%;height:44px;border:0;border-radius:6px;background:#1463ff;color:#fff;font-size:17px}p{color:#19723b}</style>
 </head><body><main><h2>TinyNav &#37197;&#32593;</h2><p>]] .. html(msg) .. [[</p>
 <form method="post" action="/save">
 <label>&#35774;&#22791;SN</label><input name="sn" required value="]] .. html(c.sn) .. [[">
-<label>MQTT&#22320;&#22336;</label><input name="mqtt_host" required value="]] .. html(c.mqtt_host) .. [[">
-<div class="row"><div><label>&#31471;&#21475;</label><input name="mqtt_port" inputmode="numeric" value="]] .. html(c.mqtt_port) .. [["></div>
-<div><label>&#38388;&#38548;(&#31186;)</label><input name="interval" inputmode="numeric" value="]] .. html(interval) .. [["></div></div>
-<label>&#29992;&#25143;&#21517;</label><input name="mqtt_user" value="]] .. html(c.mqtt_user) .. [[">
-<label>&#23494;&#30721;</label><input name="mqtt_pass" type="password" value="]] .. html(c.mqtt_pass) .. [[">
-<label class="ck"><input type="checkbox" name="mqtt_ssl"]] .. ssl .. [[>&#21551;&#29992;MQTTS</label>
+<label>TCP IP/&#22495;&#21517;</label><input name="tcp_host" value="]] .. html(c.tcp_host) .. [[">
+<div class="row"><div><label>TCP&#31471;&#21475;</label><input name="tcp_port" inputmode="numeric" value="]] .. html(tcpPort) .. [["></div></div>
 <button type="submit">&#20445;&#23384;</button></form></main></body></html>]]
 end
 
@@ -126,18 +121,20 @@ local function scheduleRestart()
     end, config.CONFIG_REBOOT_DELAY_MS or 1500)
 end
 
--- Save submitted AP/MQTT configuration.
+-- Save submitted AP device/TCP configuration.
 local function save(body)
-    local c = readForm(body)
-    c.mqtt_ssl = c.mqtt_ssl == "on"
-    c.report_interval_ms = (tonumber(c.interval) or 600) * 1000
+    local form = readForm(body)
+    local c = storage.get()
+    c.sn = form.sn
+    c.tcp_host = form.tcp_host
+    c.tcp_port = form.tcp_port
     local ok = storage.save(c)
     if ok then
         local saved = storage.get()
         logInfo("setup", "config saved",
             "sn_len", saved.sn and #saved.sn or 0,
-            "host_len", saved.mqtt_host and #saved.mqtt_host or 0,
-            "port", tostring(saved.mqtt_port)
+            "tcp_host_len", saved.tcp_host and #saved.tcp_host or 0,
+            "tcp_port", tostring(saved.tcp_port)
         )
         scheduleRestart()
         return savedPage()

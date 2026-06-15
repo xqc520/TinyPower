@@ -169,14 +169,25 @@ local function workOnce()
     end
 
     local mqttApp = require("mqtt_app")
+    local tcpApp = require("tcp_app")
     local retryCount = tonumber(config.PUBLISH_RETRY_COUNT) or 1
     if retryCount < 1 then
         retryCount = 1
     end
     local ok = false
+    local mqttDone = false
+    local tcpDone = false
     for attempt = 1, retryCount do
         log.info("app", "send attempt", attempt, retryCount, "time", now())
-        ok = mqttApp.publishLocation(cfg, loc, batteryVoltage, tcase)
+        if not mqttDone then
+            mqttDone = mqttApp.publishLocation(cfg, loc, batteryVoltage, tcase)
+        end
+        if not tcpDone then
+            local tcpCfg = storage.get()
+            tcpDone = tcpApp.publishLocation(tcpCfg, loc, batteryVoltage, tcase)
+        end
+        ok = mqttDone and tcpDone
+        log.info("app", "send result", "mqtt", mqttDone and 1 or 0, "tcp", tcpDone and 1 or 0)
         if ok then
             break
         end
@@ -209,6 +220,9 @@ function M.start()
         "sn_len", bootCfg.sn and #bootCfg.sn or 0,
         "host_len", bootCfg.mqtt_host and #bootCfg.mqtt_host or 0,
         "port", tostring(bootCfg.mqtt_port),
+        "tcp_host_len", bootCfg.tcp_host and #bootCfg.tcp_host or 0,
+        "tcp_port", tostring(bootCfg.tcp_port),
+        "tcp_ready", storage.tcpReady(bootCfg) and 1 or 0,
         "ready", storage.ready(bootCfg) and 1 or 0
     )
 

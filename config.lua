@@ -19,15 +19,22 @@ M.GNSS_DEBUG_LOG_INTERVAL_MS = 5 * 1000
 M.NET_TIMEOUT_MS = 60 * 1000
 M.MQTT_TIMEOUT_MS = 45 * 1000
 M.MQTT_QOS = 1
-M.SM4_TIMEOUT_MS = 20 * 1000
-M.CA_FILE = "/luadb/rootCA.crt"
-M.MQTT_TLS_TIME_WAIT_MS = 20 * 1000
 M.MQTT_CONNECT_RETRY_COUNT = 2
 M.MQTT_CONNECT_RETRY_DELAY_MS = 5 * 1000
 M.PUBLISH_RETRY_COUNT = 3
 M.PUBLISH_RETRY_DELAY_MS = 15 * 1000
+-- Fixed plain MQTT background connection. This is not exposed in the WiFi setup page.
+M.MQTT_HOST = ""
+M.MQTT_PORT = 1883
+M.MQTT_USER = ""
+M.MQTT_PASS = ""
 -- Keep MQTT online briefly after a successful upload so server config commands can arrive.
 M.POST_PUBLISH_DOWNLINK_WAIT_MS = 2 * 1000
+-- Optional second TCP upload channel, configured by WiFi AP or MQTT downlink.
+M.TCP_CONNECT_TIMEOUT_MS = 20 * 1000
+M.TCP_TX_WAIT_MS = 3 * 1000
+M.TCP_CLOSE_DELAY_MS = 200
+M.TCP_PAYLOAD_SUFFIX = "\n"
 
 -- 电池电压采样：VBAT+ -- R21(170K) -- ADC0 -- R27(10K) -- GND。
 M.BATTERY_ADC_ID = 0
@@ -118,7 +125,6 @@ M.PSM_ONLY_TEST_SLEEP_MS = 10 * 60 * 1000
 M.MQTT_TEST_MODE = false
 M.MQTT_TEST_LOOP_MS = 30 * 1000
 M.MQTT_TEST_SUB_EXTRA = false
-M.MQTT_TEST_FORCE_SM4 = false
 M.MQTT_TEST_FAKE_GNSS = false
 M.MQTT_TEST_LOCATION = {
     lat = 39.908823,
