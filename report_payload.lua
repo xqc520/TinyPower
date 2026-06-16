@@ -3,7 +3,8 @@ local device = require("device")
 
 local M = {}
 
--- 当前协议要求 timeStamp 使用 epoch 秒；RTC 不可用时返回 0，避免上报失败。
+-- 当前协议要求 timeStamp 使用 epoch 秒；GNSS 定位成功后会先同步 RTC。
+-- RTC 不可用时返回 0，避免上报失败。
 local function now()
     return os and os.time and os.time() or 0
 end

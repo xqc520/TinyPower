@@ -39,6 +39,59 @@ local function numberValue(v)
     return nil
 end
 
+-- 过滤明显异常的 GNSS 时间，避免错误时间写入系统 RTC。
+local function validRtcTime(year, mon, day, hour, min, sec)
+    return year >= 2020
+        and mon >= 1 and mon <= 12
+        and day >= 1 and day <= 31
+        and hour >= 0 and hour <= 23
+        and min >= 0 and min <= 59
+        and sec >= 0 and sec <= 59
+end
+
+-- RMC 输出的是 UTC 时间；rtc.set 也按 UTC 写入，所以这里不做时区换算。
+local function syncRtcFromLocation(loc)
+    if not (rtc and rtc.set) then
+        log.warn("gnss", "rtc api missing")
+        return false
+    end
+
+    local year = tonumber(loc and loc.year)
+    local mon = tonumber(loc and loc.month)
+    local day = tonumber(loc and loc.day)
+    local hour = tonumber(loc and loc.hour)
+    local min = tonumber(loc and loc.min)
+    local sec = tonumber(loc and loc.sec)
+    if not (year and mon and day and hour and min and sec) then
+        log.warn("gnss", "rtc sync skip", "bad time")
+        return false
+    end
+    year = math.floor(year)
+    mon = math.floor(mon)
+    day = math.floor(day)
+    hour = math.floor(hour)
+    min = math.floor(min)
+    sec = math.floor(sec)
+    if year < 100 then
+        year = year + 2000
+    end
+    if not validRtcTime(year, mon, day, hour, min, sec) then
+        log.warn("gnss", "rtc sync skip", "out of range", year, mon, day, hour, min, sec)
+        return false
+    end
+
+    local ok = rtc.set({
+        year = year,
+        mon = mon,
+        day = day,
+        hour = hour,
+        min = min,
+        sec = sec,
+    })
+    log.info("gnss", "rtc sync", ok and 1 or 0, year, mon, day, hour, min, sec)
+    return ok and true or false
+end
+
 -- 打开 GNSS 电源并绑定 UART。只在未打开时执行，避免重复 setup 影响串口接收。
 function M.open()
     if M.opened then
@@ -224,6 +277,7 @@ function M.fix(timeout)
                 "sats", loc.sats,
                 "hdop", loc.hdop,
                 "alt", loc.altitude)
+            syncRtcFromLocation(loc)
             logDiag(diag, waited, true)
             return loc
         end

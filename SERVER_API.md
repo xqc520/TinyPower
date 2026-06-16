@@ -30,7 +30,7 @@ MQTT 和第二路 TCP 使用相同 JSON。
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `SN` | string | 设备 SN |
-| `timeStamp` | string | epoch 秒 |
+| `timeStamp` | string | GNSS 同步后的 epoch 秒 |
 | `sendFrequency` | number | 上报频度，单位分钟 |
 | `tcase` | number | 机箱温度，读取失败为 `-1` |
 | `batteryVoltage` | number | 电池电压，单位 V，读取失败为 `-1.00` |
