@@ -1,6 +1,6 @@
 # TinyPower 服务器对接文档
 
-最后更新：2026-06-15
+最后更新：2026-06-16
 
 ## 1. 连接
 
@@ -11,7 +11,7 @@
 | 固定 MQTT | 上报数据、接收远程配置 | `config.lua` 写死 | 普通 TCP MQTT，默认端口 `1883`，不使用 TLS/MQTTS |
 | 第二路 TCP | 向业务服务器发送同一份实时数据 | WiFi 热点或 MQTT 下发 | 未配置时跳过，不影响 MQTT |
 
-WiFi 热点只允许配置 `sn`、`tcp_host`、`tcp_port`。
+WiFi 热点只配置 `sn`、`tcp_host`、`tcp_port`。
 
 ## 2. MQTT Topic
 
@@ -21,7 +21,7 @@ WiFi 热点只允许配置 `sn`、`tcp_host`、`tcp_port`。
 | 设备上行 | 命令响应 | `sys/{SN}/json/up/resp` | 明文 JSON |
 | 服务器下行 | 设备命令 | `sys/{SN}/json/down/cmd` | 明文 JSON |
 
-服务器可订阅 `sys/+/json/up/realTime` 和 `sys/+/json/up/resp`。
+服务器订阅 `sys/+/json/up/realTime` 和 `sys/+/json/up/resp` 即可。
 
 ## 3. 上报流程
 
@@ -29,7 +29,7 @@ WiFi 热点只允许配置 `sn`、`tcp_host`、`tcp_port`。
 2. 定位成功后，设备向 MQTT 上报明文 JSON。
 3. MQTT 上报成功后，设备保持在线约 2 秒，用于接收远程配置。
 4. 设备读取最新配置；如果 `tcp_host/tcp_port` 已配置，则连接第二路 TCP，并发送同一份明文 JSON。
-5. 设备断开连接，进入等待或低功耗。
+5. 发送结束后断开连接，进入等待或低功耗。
 
 第二路 TCP 报文格式为 `JSON + \n`。
 
@@ -51,7 +51,7 @@ MQTT `realTime` 与第二路 TCP 使用相同 JSON。
 
 下发 Topic 固定为 `sys/{SN}/json/down/cmd`。
 
-只识别下列命令名和字段名，不兼容其它别名。
+只识别下列命令和字段，不兼容其它别名。
 
 | 命令 | 用途 | 字段 |
 | --- | --- | --- |
@@ -69,7 +69,7 @@ MQTT `realTime` 与第二路 TCP 使用相同 JSON。
 | `tcp_port` | number | 第二路 TCP 服务器端口，范围 `1` 到 `65535` |
 | `sendFrequency` | number | 上报频度，单位分钟 |
 
-未下发的配置字段保持原值。MQTT 服务器地址、端口、账号、密码固定在固件中，不能通过 WiFi 或 MQTT 远程修改。
+未下发字段保持原值。MQTT 地址、端口、账号、密码固定在固件中，不能通过 WiFi 或 MQTT 修改。
 
 ## 6. 命令响应
 
