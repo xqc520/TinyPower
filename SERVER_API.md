@@ -9,7 +9,7 @@
 | 固定 MQTT | 上报、接收命令 | 固件 `config.lua` 写死 | 普通 TCP MQTT，不使用 TLS |
 | 第二路 TCP | 发送同一份实时数据 | WiFi 或 MQTT 下发 | 未配置时跳过 |
 
-- WiFi 热点只配置 `sn`、`tcp_host`、`tcp_port`。
+- WiFi 热点配置 `sn`、`tcp_host`、`tcp_port`、`sendFrequency`。
 - 第二路 TCP 报文格式：`JSON + \n`。
 - MQTT 地址、端口、账号、密码不能远程修改。
 

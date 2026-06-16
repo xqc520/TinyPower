@@ -21,7 +21,7 @@
 | `config.lua` | 固件固定参数：MQTT、超时、GNSS、ADC、低功耗 |
 | `app.lua` | 主状态机：配网、采集、定位、双路上报、进入低功耗 |
 | `storage.lua` | 持久化配置，只使用 `sn/tcp_host/tcp_port/sendFrequency` |
-| `wifi_config.lua` | WiFi 热点配置页，只配置 SN 和第二路 TCP |
+| `wifi_config.lua` | WiFi 热点配置页，配置 SN、第二路 TCP 和上报频度 |
 | `mqtt_app.lua` | 固定普通 MQTT 连接，接收远程配置 |
 | `tcp_app.lua` | 可配置 TCP 连接，发送同一份实时 JSON |
 | `report_payload.lua` | 统一生成实时上报 JSON |
@@ -48,7 +48,7 @@
 | `sn` | WiFi 或 MQTT | 设备 SN，也是 MQTT Topic 中的 `{SN}` |
 | `tcp_host` | WiFi 或 MQTT | 第二路 TCP IP 或域名 |
 | `tcp_port` | WiFi 或 MQTT | 第二路 TCP 端口 |
-| `sendFrequency` | MQTT 或默认值 | 上报频度，单位分钟 |
+| `sendFrequency` | WiFi、MQTT 或默认值 | 上报频度，单位分钟 |
 
 固定 MQTT 地址、端口、账号、密码只在 `config.lua` 中修改，不通过 WiFi 或远程命令配置。
 

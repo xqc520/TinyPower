@@ -1,4 +1,4 @@
--- WiFi 配网门户：只开放 SN 和第二路 TCP 参数，固定 MQTT 不在页面配置。
+-- WiFi 配网门户：开放 SN、第二路 TCP 和上报频度，固定 MQTT 不在页面配置。
 local config = require("config")
 local device = require("device")
 local storage = require("storage")
@@ -72,10 +72,11 @@ local function apUrl()
     return "http://" .. config.AP_IP .. "/"
 end
 
--- 渲染本地热点配置页：只开放 SN 和第二路 TCP 参数，固定 MQTT 不在这里配置。
+-- 渲染本地热点配置页：只开放 SN、第二路 TCP 和上报频度，固定 MQTT 不在这里配置。
 local function page(msg)
     local c = storage.get()
     local tcpPort = (c.tcp_port and c.tcp_port > 0) and c.tcp_port or ""
+    local sendFrequency = c.sendFrequency or ""
     return [[<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>TinyNav &#37197;&#32593;</title>
 <style>body{font-family:Arial,sans-serif;margin:0;background:#f7f8fa;color:#222}
@@ -86,6 +87,7 @@ button{width:100%;height:44px;border:0;border-radius:6px;background:#1463ff;colo
 </head><body><main><h2>TinyNav &#37197;&#32593;</h2><p>]] .. html(msg) .. [[</p>
 <form method="post" action="/save">
 <label>&#35774;&#22791;SN</label><input name="sn" required value="]] .. html(c.sn) .. [[">
+<label>&#19978;&#25253;&#39057;&#24230;(&#20998;&#38047;)</label><input name="sendFrequency" inputmode="numeric" type="number" min="1" max="1440" required value="]] .. html(sendFrequency) .. [[">
 <label>TCP IP/&#22495;&#21517;</label><input name="tcp_host" value="]] .. html(c.tcp_host) .. [[">
 <div class="row"><div><label>TCP&#31471;&#21475;</label><input name="tcp_port" inputmode="numeric" value="]] .. html(tcpPort) .. [["></div></div>
 <button type="submit">&#20445;&#23384;</button></form></main></body></html>]]
@@ -122,12 +124,13 @@ local function scheduleRestart()
     end, config.CONFIG_REBOOT_DELAY_MS or 1500)
 end
 
--- 保存热点提交的 SN 和第二路 TCP 参数。
--- 先读取旧配置再覆盖，避免 WiFi 重配时把 MQTT 下发的上报频度清掉。
+-- 保存热点提交的 SN、第二路 TCP 和上报频度。
+-- 先读取旧配置再覆盖，避免 WiFi 重配时丢失其它持久化配置。
 local function save(body)
     local form = readForm(body)
     local c = storage.get()
     c.sn = form.sn
+    c.sendFrequency = form.sendFrequency
     c.tcp_host = form.tcp_host
     c.tcp_port = form.tcp_port
     local ok = storage.save(c)
@@ -135,6 +138,7 @@ local function save(body)
         local saved = storage.get()
         logInfo("setup", "config saved",
             "sn_len", saved.sn and #saved.sn or 0,
+            "sendFrequency", tostring(saved.sendFrequency),
             "tcp_host_len", saved.tcp_host and #saved.tcp_host or 0,
             "tcp_port", tostring(saved.tcp_port)
         )
