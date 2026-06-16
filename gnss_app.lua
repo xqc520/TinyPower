@@ -1,7 +1,9 @@
+-- GNSS 定位模块：负责打开 GNSS、等待有效定位、输出诊断日志。
 local config = require("config")
 
 local M = { opened = false }
 
+-- 日志参数转文本，避免 nil 拼接或打印时信息丢失。
 local function value(v)
     if v == nil then
         return "nil"
@@ -10,6 +12,7 @@ local function value(v)
 end
 
 local function safeCall(obj, name, ...)
+    -- libgnss API 在不同固件上差异较多，统一保护可以避免定位异常导致主流程崩溃。
     local fn = obj and obj[name]
     if type(fn) ~= "function" then
         return nil

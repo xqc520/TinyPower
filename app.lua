@@ -1,3 +1,4 @@
+-- 主业务状态机：串起配网、采集、定位、双路上报和低功耗。
 local config = require("config")
 local storage = require("storage")
 local power = require("power")

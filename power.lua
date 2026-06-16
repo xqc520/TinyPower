@@ -1,3 +1,4 @@
+-- 低功耗业务入口：关闭外设、设置唤醒定时器，并进入 PSM+。
 local config = require("config")
 
 local M = {}
@@ -7,6 +8,7 @@ local function now()
     return os and os.time and os.time() or 0
 end
 
+-- 统一封装 WORK_MODE 切换，避免各处直接调用 pm.power 后日志不一致。
 local function setWorkMode(mode, label)
     if pm and pm.power and pm.WORK_MODE then
         local ok = pm.power(pm.WORK_MODE, mode)
@@ -66,6 +68,7 @@ function M.cellularOff()
 end
 
 local function stopAp()
+    -- 睡前优先调用 wifi_config.stop，让 HTTP/DNS/DHCP 都能一起关闭。
     local loaded = package and package.loaded
     local wifiConfig = loaded and loaded["wifi_config"] or nil
     if wifiConfig and wifiConfig.stop then
@@ -81,6 +84,7 @@ local function setSensorPower(enabled)
     if not config.PSM_DISABLE_SENSOR_POWER then
         return
     end
+    -- 外部传感器电源默认不动；只有硬件确认需要省电时才打开此开关。
     local pin = config.PSM_SENSOR_POWER_GPIO
     if pin and gpio and gpio.setup then
         local level = enabled and (config.PSM_SENSOR_POWER_ON_LEVEL or 1) or (config.PSM_SENSOR_POWER_OFF_LEVEL or 0)
@@ -98,6 +102,7 @@ function M.sensorPowerOn()
 end
 
 local function stopSensorPower()
+    -- 进入低功耗前关闭外部传感器电源，和 sensorPowerOn 成对使用。
     setSensorPower(false)
 end
 

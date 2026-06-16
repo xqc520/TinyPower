@@ -1,3 +1,4 @@
+-- 实时上报 JSON 构造模块：MQTT 和第二路 TCP 都必须共用这里。
 local device = require("device")
 
 local M = {}

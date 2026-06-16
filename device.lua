@@ -1,3 +1,4 @@
+-- 设备硬件采集模块：读取设备标识、电池电压和机箱温度。
 local storage = require("storage")
 local config = require("config")
 
@@ -24,7 +25,7 @@ local TCASE_NTC_BOX_10K_TAB = {
     713
 }
 
--- Read a mobile module value without letting missing APIs break boot.
+-- 读取模组标识信息；不同固件可能缺少对应 API，所以这里统一保护。
 local function mobileValue(name)
     if mobile and mobile[name] then
         local ok, v = pcall(mobile[name])
@@ -34,7 +35,7 @@ local function mobileValue(name)
     end
 end
 
--- Return configured SN first, then fallback hardware IDs for naming.
+-- 设备标识优先使用已配置 SN；没有 SN 时再退回 IMEI/MUID。
 function M.id(cfg)
     cfg = cfg or storage.get()
     if cfg.sn and #cfg.sn > 0 then
@@ -43,11 +44,12 @@ function M.id(cfg)
     return mobileValue("imei") or mobileValue("muid") or "tinynav"
 end
 
--- Return the modem IMEI when the firmware exposes it.
+-- 返回模组 IMEI；固件不支持时返回 nil。
 function M.imei()
     return mobileValue("imei")
 end
 
+-- 四舍五入到指定小数位，用于电压和温度上报。
 local function round(value, decimals)
     local scale = 10 ^ (decimals or 0)
     return math.floor(value * scale + 0.5) / scale
@@ -164,6 +166,7 @@ local function scanBatteryAdcChannels(sampleCount)
     if not config.BATTERY_ADC_SCAN_ON_ZERO then
         return
     end
+    -- 仅在诊断开关打开时扫描 ADC0-ADC3，帮助确认实际硬件接在哪一路。
     log.warn("device", "battery adc scan start")
     for ch = 0, 3 do
         readAdcMv(ch, sampleCount, "battery adc scan")
@@ -255,7 +258,7 @@ function M.tcaseTemperature()
     return tempC
 end
 
--- Build the AP SSID from the last characters of the device ID.
+-- 热点 SSID 使用设备标识尾号，便于现场区分多台设备。
 function M.apSsid(cfg)
     local id = M.id(cfg)
     local tail = id:match("([%w_%-]+)$") or id

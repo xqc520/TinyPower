@@ -1,3 +1,4 @@
+-- 持久化配置层：统一清洗和保存 SN、第二路 TCP、上报频度。
 local config = require("config")
 
 local M = {}

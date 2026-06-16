@@ -1,3 +1,4 @@
+-- 第二路 TCP 通道：按配置连接业务服务器，发送与 MQTT 相同的明文 JSON。
 local config = require("config")
 local net = require("net")
 local reportPayload = require("report_payload")

@@ -1,3 +1,4 @@
+-- 固定 MQTT 通道：普通 TCP MQTT，上报实时数据并接收远程配置。
 local config = require("config")
 local device = require("device")
 local net = require("net")

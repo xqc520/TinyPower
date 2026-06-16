@@ -1,3 +1,4 @@
+-- WiFi 配网门户：只开放 SN 和第二路 TCP 参数，固定 MQTT 不在页面配置。
 local config = require("config")
 local device = require("device")
 local storage = require("storage")
