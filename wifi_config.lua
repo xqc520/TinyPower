@@ -86,10 +86,10 @@ input{box-sizing:border-box;width:100%;height:42px;padding:0 10px;border:1px sol
 button{width:100%;height:44px;border:0;border-radius:6px;background:#1463ff;color:#fff;font-size:17px}p{color:#19723b}</style>
 </head><body><main><h2>TinyNav &#37197;&#32593;</h2><p>]] .. html(msg) .. [[</p>
 <form method="post" action="/save">
-<label>&#35774;&#22791;SN</label><input name="sn" required value="]] .. html(c.sn) .. [[">
-<label>&#19978;&#25253;&#39057;&#24230;(&#20998;&#38047;)</label><input name="sendFrequency" inputmode="numeric" type="number" min="1" max="1440" required value="]] .. html(sendFrequency) .. [[">
-<label>TCP IP/&#22495;&#21517;</label><input name="tcp_host" value="]] .. html(c.tcp_host) .. [[">
-<div class="row"><div><label>TCP&#31471;&#21475;</label><input name="tcp_port" inputmode="numeric" value="]] .. html(tcpPort) .. [["></div></div>
+<label>&#35774;&#22791;&#32534;&#21495;</label><input name="sn" required value="]] .. html(c.sn) .. [[">
+<label>&#19978;&#25253;&#39057;&#24230;&#65288;&#20998;&#38047;&#65289;</label><input name="sendFrequency" inputmode="numeric" type="number" min="1" max="1440" required value="]] .. html(sendFrequency) .. [[">
+<label>&#26381;&#21153;&#22120;&#22320;&#22336;</label><input name="tcp_host" value="]] .. html(c.tcp_host) .. [[">
+<div class="row"><div><label>&#26381;&#21153;&#22120;&#31471;&#21475;</label><input name="tcp_port" inputmode="numeric" value="]] .. html(tcpPort) .. [["></div></div>
 <button type="submit">&#20445;&#23384;</button></form></main></body></html>]]
 end
 
