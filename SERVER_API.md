@@ -76,7 +76,69 @@ MQTT 和第二路 TCP 使用相同 JSON。
 | `sn` | string | 当前回包 SN |
 | `time` | number | epoch 秒 |
 
-## 6. 错误码
+## 6. 交互示例
+
+设备实时上报：
+
+Topic：`sys/TN000001/json/up/realTime`
+
+```json
+{
+  "SN": "TN000001",
+  "timeStamp": "1781510400",
+  "sendFrequency": 10,
+  "tcase": 28.5,
+  "batteryVoltage": 3.82,
+  "latitude": 31.230416,
+  "longitude": 121.473701
+}
+```
+
+服务器修改上报频度：
+
+Topic：`sys/TN000001/json/down/cmd`
+
+```json
+{
+  "cmd": "set_report_interval",
+  "request_id": "req-001",
+  "sendFrequency": 5
+}
+```
+
+服务器修改设备配置：
+
+Topic：`sys/TN000001/json/down/cmd`
+
+```json
+{
+  "cmd": "set_config",
+  "request_id": "req-002",
+  "config": {
+    "sn": "TN000002",
+    "tcp_host": "tcp.example.com",
+    "tcp_port": 9000,
+    "sendFrequency": 10
+  }
+}
+```
+
+设备命令响应：
+
+Topic：`sys/TN000001/json/up/resp`
+
+```json
+{
+  "cmd": "set_config",
+  "request_id": "req-002",
+  "result": 0,
+  "reason": "ok",
+  "sn": "TN000001",
+  "time": 1781510402
+}
+```
+
+## 7. 错误码
 
 | reason | 说明 |
 | --- | --- |
